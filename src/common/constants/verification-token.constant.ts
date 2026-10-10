@@ -1,0 +1,7 @@
+export const VERIFICATION_TOKEN_TYPE = {
+  EMAIL_VERIFICATION: "EMAIL_VERIFICATION",
+  DEACTIVATION: "DEACTIVATION",
+} as const;
+
+export type VerificationTokenType =
+  (typeof VERIFICATION_TOKEN_TYPE)[keyof typeof VERIFICATION_TOKEN_TYPE];

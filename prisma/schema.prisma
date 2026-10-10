@@ -1,0 +1,83 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "./node_modules/@prisma/client-site"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("SITE_DATABASE_URL")
+}
+
+model Site {
+  id          String    @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  name        String    @db.VarChar(150)
+  code        String    @unique @db.VarChar(50)
+  address     String?   @db.Text
+  description String?   @db.Text
+  status      String    @default("ACTIVE") @db.VarChar(30)
+  startDate   DateTime? @map("start_date") @db.Date
+  endDate     DateTime? @map("end_date") @db.Date
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  zones           Zone[]
+  safetyConfigs   SiteSafetyConfig[]
+  restrictedAreas RestrictedArea[]
+
+  @@index([status])
+  @@map("sites")
+}
+
+model Zone {
+  id          String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  siteId      String   @map("site_id") @db.Uuid
+  name        String   @db.VarChar(150)
+  code        String   @db.VarChar(50)
+  description String?  @db.Text
+  status      String   @default("ACTIVE") @db.VarChar(30)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  site            Site             @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  restrictedAreas RestrictedArea[]
+
+  @@unique([siteId, code])
+  @@index([siteId, status])
+  @@map("zones")
+}
+
+model SiteSafetyConfig {
+  id                   String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  siteId               String   @unique @map("site_id") @db.Uuid
+  confidenceThreshold  Decimal  @default(0.80) @map("confidence_threshold") @db.Decimal(5, 4)
+  confirmationDuration Int      @default(2) @map("confirmation_duration")
+  cooldownDuration     Int      @default(30) @map("cooldown_duration")
+  enableNoHelmet       Boolean  @default(true) @map("enable_no_helmet")
+  enableNoVest         Boolean  @default(true) @map("enable_no_vest")
+  enableRestrictedArea Boolean  @default(true) @map("enable_restricted_area")
+  updatedBy            String?  @map("updated_by") @db.Uuid
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@map("site_safety_configs")
+}
+
+model RestrictedArea {
+  id          String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  siteId      String   @map("site_id") @db.Uuid
+  zoneId      String?  @map("zone_id") @db.Uuid
+  name        String   @db.VarChar(150)
+  description String?  @db.Text
+  boundary    Json
+  status      String   @default("ACTIVE") @db.VarChar(30)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  site Site  @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  zone Zone? @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+
+  @@index([siteId, status])
+  @@map("restricted_areas")
+}

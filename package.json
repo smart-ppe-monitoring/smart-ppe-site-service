@@ -1,0 +1,46 @@
+{
+  "name": "smart-ppe-site-service",
+  "version": "1.0.0",
+  "description": "PPE Site Management Microservice (:8891) - Quản lý công trường, khu vực, vùng nguy hiểm và cấu hình an toàn",
+  "main": "dist/server.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/smart-ppe-monitoring/smart-ppe-site-service.git"
+  },
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "prisma:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "test": "node --test --test-concurrency=1 --import tsx tests/*.test.ts"
+  },
+  "dependencies": {
+    "@smart-ppe/common": "git+https://github.com/smart-ppe-monitoring/smart-ppe-shared-contracts.git",
+    "@prisma/client": "^5.22.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^4.22.2",
+    "helmet": "^8.3.0",
+    "ioredis": "^6.0.0",
+    "jsonwebtoken": "^9.0.3",
+    "morgan": "^1.12.1",
+    "uuidv7": "^1.2.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.25",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/morgan": "^1.9.10",
+    "@types/node": "^22.20.0",
+    "prisma": "^5.22.0",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3"
+  }
+}
