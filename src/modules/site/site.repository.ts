@@ -107,7 +107,8 @@ export class SiteRepository {
   async findAllSites(query: SiteQueryDto): Promise<PaginatedResultDto<any>> {
     const page = Number(query.page) || 1;
     const limit = Number(query.limit) || 20;
-    const skip = calculatePaginationSkip(page, limit);
+    const { skip, take, page: safePage, limit: safeLimit } =
+      calculatePaginationSkip(page, limit);
 
     const where: any = {};
     if (query.status) {
@@ -131,7 +132,7 @@ export class SiteRepository {
       (this.db as any).site.findMany({
         where,
         skip,
-        take: limit,
+        take,
         orderBy,
         include: {
           safetyConfigs: true,
@@ -147,7 +148,7 @@ export class SiteRepository {
 
     return {
       data,
-      meta: formatPaginationMeta(page, limit, total),
+      meta: formatPaginationMeta(safePage, safeLimit, total),
     };
   }
 
@@ -235,7 +236,8 @@ export class SiteRepository {
   async findAllZones(query: ZoneQueryDto): Promise<PaginatedResultDto<any>> {
     const page = Number(query.page) || 1;
     const limit = Number(query.limit) || 20;
-    const skip = calculatePaginationSkip(page, limit);
+    const { skip, take, page: safePage, limit: safeLimit } =
+      calculatePaginationSkip(page, limit);
 
     const where: any = {};
     if (query.siteId) {
@@ -261,7 +263,7 @@ export class SiteRepository {
       (this.db as any).zone.findMany({
         where,
         skip,
-        take: limit,
+        take,
         orderBy,
         include: {
           site: {
@@ -273,7 +275,7 @@ export class SiteRepository {
 
     return {
       data,
-      meta: formatPaginationMeta(page, limit, total),
+      meta: formatPaginationMeta(safePage, safeLimit, total),
     };
   }
 
@@ -379,7 +381,8 @@ export class SiteRepository {
   ): Promise<PaginatedResultDto<any>> {
     const page = Number(query.page) || 1;
     const limit = Number(query.limit) || 20;
-    const skip = calculatePaginationSkip(page, limit);
+    const { skip, take, page: safePage, limit: safeLimit } =
+      calculatePaginationSkip(page, limit);
 
     const where: any = {};
     if (query.siteId) {
@@ -408,7 +411,7 @@ export class SiteRepository {
       (this.db as any).restrictedArea.findMany({
         where,
         skip,
-        take: limit,
+        take,
         orderBy,
         include: {
           site: {
@@ -423,7 +426,7 @@ export class SiteRepository {
 
     return {
       data,
-      meta: formatPaginationMeta(page, limit, total),
+      meta: formatPaginationMeta(safePage, safeLimit, total),
     };
   }
 
