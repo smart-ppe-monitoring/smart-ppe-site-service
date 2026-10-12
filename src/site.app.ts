@@ -12,10 +12,12 @@ import {
   zoneRouter,
   restrictedAreaRouter,
 } from "./modules/site/site.route";
+import { safetyRuleRouter } from "./modules/safety-rule/safety-rule.route";
 import { rateLimitMiddleware } from "./middlewares/rate-limit.middleware";
 import { requestIdMiddleware } from "./middlewares/request-id.middleware";
 import { maintenanceGuard } from "./middlewares/maintenance.middleware";
 import { envConfig } from "./config/env.config";
+import { siteRepository } from "./modules/site/site.repository";
 
 /**
  * Express Application cho Site Management Microservice (:8891)
@@ -83,16 +85,23 @@ siteApp.use(express.urlencoded({ extended: true, limit: "2mb" }));
 siteApp.use(cookieParser());
 
 // 3. Health check endpoints cho Traefik Gateway & Monitoring
-const healthHandler = (_req: express.Request, res: express.Response) => {
-  res.status(200).json({
-    status: "ok",
+const healthHandler = async (_req: express.Request, res: express.Response) => {
+  const isHealthy = await siteRepository.checkDatabaseHealth();
+  const dbStatus = isHealthy ? "up" : "down";
+
+  res.status(isHealthy ? 200 : 503).json({
+    status: isHealthy ? "ok" : "degraded",
     service: "site-service",
+    checks: {
+      database: dbStatus,
+    },
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
   });
 };
 
 siteApp.get("/health", healthHandler);
+siteApp.get("/health/live", (_req, res) => res.status(200).json({ status: "ok" }));
 siteApp.get("/api/v1/sites/health", healthHandler);
 siteApp.get("/sites/health", healthHandler);
 
@@ -125,6 +134,19 @@ siteApp.use(
   rateLimitMiddleware,
   maintenanceGuard(),
   restrictedAreaRouter,
+);
+
+siteApp.use(
+  "/api/v1/safety-rules",
+  rateLimitMiddleware,
+  maintenanceGuard(),
+  safetyRuleRouter,
+);
+siteApp.use(
+  "/safety-rules",
+  rateLimitMiddleware,
+  maintenanceGuard(),
+  safetyRuleRouter,
 );
 
 // 5. Error & 404 Handlers

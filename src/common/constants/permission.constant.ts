@@ -25,6 +25,7 @@ export const PERMISSIONS = {
 
   // Audit Logs
   AUDIT_LOG_READ: "AUDIT_LOG_READ",
+  AUDIT_LOG_EXPORT: "AUDIT_LOG_EXPORT",
 
   // System Maintenance
   MAINTENANCE_READ: "MAINTENANCE_READ",
@@ -79,6 +80,14 @@ export const PERMISSIONS = {
 
   PPE_MODEL_READ: "PPE_MODEL_READ",
   PPE_MODEL_MANAGE: "PPE_MODEL_MANAGE",
+
+  // Message Broker & Event Ingestion
+  PPE_BROKER_PUBLISH: "PPE_BROKER_PUBLISH",
+  PPE_BROKER_MANAGE: "PPE_BROKER_MANAGE",
+
+  // Reliability, Idempotency & Fault Tolerance
+  PPE_RELIABILITY_READ: "PPE_RELIABILITY_READ",
+  PPE_RELIABILITY_MANAGE: "PPE_RELIABILITY_MANAGE",
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;

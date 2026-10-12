@@ -55,6 +55,7 @@ model SiteSafetyConfig {
   enableNoHelmet       Boolean  @default(true) @map("enable_no_helmet")
   enableNoVest         Boolean  @default(true) @map("enable_no_vest")
   enableRestrictedArea Boolean  @default(true) @map("enable_restricted_area")
+  modelVersionId       String?  @map("model_version_id") @db.Uuid
   updatedBy            String?  @map("updated_by") @db.Uuid
   createdAt            DateTime @default(now()) @map("created_at")
   updatedAt            DateTime @updatedAt @map("updated_at")

@@ -24,7 +24,7 @@ export class SiteController {
   createSite = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const body = req.body as CreateSiteDto;
-      const result = await this.service.createSite(body);
+      const result = await this.service.createSite(body, req.user?.id);
       res.status(201).json({
         success: true,
         data: result,
@@ -65,7 +65,7 @@ export class SiteController {
     try {
       const { id } = req.params;
       const body = req.body as UpdateSiteDto;
-      const result = await this.service.updateSite(id, body);
+      const result = await this.service.updateSite(id, body, req.user?.id);
       res.json({
         success: true,
         data: result,
@@ -78,7 +78,7 @@ export class SiteController {
   deleteSite = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
-      const result = await this.service.deleteSite(id);
+      const result = await this.service.deleteSite(id, false, req.user?.id);
       res.json({
         success: true,
         data: result,
