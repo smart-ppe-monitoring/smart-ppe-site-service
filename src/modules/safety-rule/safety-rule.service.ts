@@ -9,6 +9,12 @@ import {
   safetyRuleCacheService,
 } from "./safety-rule-cache.service";
 import {
+  CameraServiceClient,
+  cameraServiceClient,
+  ReportingServiceClient,
+  reportingServiceClient,
+} from "../../clients";
+import {
   UpdateSiteSafetyConfigDto,
   UpdateCameraSafetyConfigDto,
   EffectiveSafetyConfigQueryDto,
@@ -23,15 +29,30 @@ import {
 } from "./safety-rule.constant";
 import { AUDIT_ACTION } from "../../common/constants/audit-log.constant";
 
+/**
+ * SafetyRuleService — Tầng nghiệp vụ điều phối quy tắc an toàn PPE
+ *
+ * Tuân thủ Clean Architecture:
+ * - Điều phối dữ liệu CSDL Site nội bộ qua SafetyRuleRepository.
+ * - Điều phối dữ liệu ngoại vi qua CameraServiceClient và ReportingServiceClient.
+ * - Quản lý phân tầng thừa kế cấu hình: Camera Override -> Site Config -> System Default.
+ * - Quản lý bộ đệm phân cấp SafetyRuleCacheService.
+ */
 export class SafetyRuleService {
   private readonly repository: SafetyRuleRepository;
+  private readonly cameraClient: CameraServiceClient;
+  private readonly reportingClient: ReportingServiceClient;
   private readonly cache: SafetyRuleCacheService;
 
   constructor(
     repository?: SafetyRuleRepository,
+    cameraClient?: CameraServiceClient,
+    reportingClient?: ReportingServiceClient,
     cache?: SafetyRuleCacheService,
   ) {
     this.repository = repository || safetyRuleRepository;
+    this.cameraClient = cameraClient || cameraServiceClient;
+    this.reportingClient = reportingClient || reportingServiceClient;
     this.cache = cache || safetyRuleCacheService;
   }
 
@@ -106,7 +127,7 @@ export class SafetyRuleService {
     }
 
     if (data.modelVersionId) {
-      const modelVersion = await this.repository.findActiveModelVersion(
+      const modelVersion = await this.reportingClient.findActiveModelVersion(
         data.modelVersionId,
       );
       if (!modelVersion) {
@@ -161,12 +182,12 @@ export class SafetyRuleService {
   async getCameraSafetyConfig(
     cameraId: string,
   ): Promise<CameraSafetyConfigItemDto> {
-    const camera = await this.repository.findCameraById(cameraId);
+    const camera = await this.cameraClient.findCameraById(cameraId);
     if (!camera) {
       throw new AppError("Không tìm thấy camera", 404, ERROR_CODE.NOT_FOUND);
     }
 
-    const config = await this.repository.findCameraConfig(cameraId);
+    const config = await this.cameraClient.findCameraConfig(cameraId);
     if (!config) {
       return {
         id: "",
@@ -187,7 +208,7 @@ export class SafetyRuleService {
       id: config.id,
       cameraId: config.cameraId,
       confidenceThreshold:
-        config.confidenceThreshold !== null
+        config.confidenceThreshold !== null && config.confidenceThreshold !== undefined
           ? Number(config.confidenceThreshold)
           : null,
       confirmationDuration: config.confirmationDuration ?? null,
@@ -196,8 +217,8 @@ export class SafetyRuleService {
       enableNoVest: config.enableNoVest ?? null,
       enableRestrictedArea: config.enableRestrictedArea ?? null,
       modelVersionId: config.modelVersionId ?? null,
-      createdAt: config.createdAt.toISOString(),
-      updatedAt: config.updatedAt.toISOString(),
+      createdAt: (config.createdAt instanceof Date ? config.createdAt : new Date(config.createdAt || Date.now())).toISOString(),
+      updatedAt: (config.updatedAt instanceof Date ? config.updatedAt : new Date(config.updatedAt || Date.now())).toISOString(),
     };
   }
 
@@ -207,13 +228,13 @@ export class SafetyRuleService {
     actorId?: string,
     meta?: { ipAddress?: string; userAgent?: string },
   ): Promise<CameraSafetyConfigItemDto> {
-    const camera = await this.repository.findCameraById(cameraId);
+    const camera = await this.cameraClient.findCameraById(cameraId);
     if (!camera) {
       throw new AppError("Không tìm thấy camera", 404, ERROR_CODE.NOT_FOUND);
     }
 
     if (data.modelVersionId) {
-      const modelVersion = await this.repository.findActiveModelVersion(
+      const modelVersion = await this.reportingClient.findActiveModelVersion(
         data.modelVersionId,
       );
       if (!modelVersion) {
@@ -225,10 +246,18 @@ export class SafetyRuleService {
       }
     }
 
-    const updated = await this.repository.upsertCameraSafetyConfig(
+    const updated = await this.cameraClient.upsertCameraSafetyConfig(
       cameraId,
       data,
     );
+
+    if (!updated) {
+      throw new AppError(
+        "Không thể cập nhật cấu hình an toàn cho camera",
+        500,
+        ERROR_CODE.INTERNAL_SERVER_ERROR,
+      );
+    }
 
     // Xóa cache cho camera này
     this.cache.invalidateCamera(cameraId);
@@ -251,7 +280,7 @@ export class SafetyRuleService {
       id: updated.id,
       cameraId: updated.cameraId,
       confidenceThreshold:
-        updated.confidenceThreshold !== null
+        updated.confidenceThreshold !== null && updated.confidenceThreshold !== undefined
           ? Number(updated.confidenceThreshold)
           : null,
       confirmationDuration: updated.confirmationDuration ?? null,
@@ -260,8 +289,8 @@ export class SafetyRuleService {
       enableNoVest: updated.enableNoVest ?? null,
       enableRestrictedArea: updated.enableRestrictedArea ?? null,
       modelVersionId: updated.modelVersionId ?? null,
-      createdAt: updated.createdAt.toISOString(),
-      updatedAt: updated.updatedAt.toISOString(),
+      createdAt: (updated.createdAt instanceof Date ? updated.createdAt : new Date(updated.createdAt || Date.now())).toISOString(),
+      updatedAt: (updated.updatedAt instanceof Date ? updated.updatedAt : new Date(updated.updatedAt || Date.now())).toISOString(),
     };
   }
 
@@ -270,12 +299,12 @@ export class SafetyRuleService {
     actorId?: string,
     meta?: { ipAddress?: string; userAgent?: string },
   ): Promise<void> {
-    const camera = await this.repository.findCameraById(cameraId);
+    const camera = await this.cameraClient.findCameraById(cameraId);
     if (!camera) {
       throw new AppError("Không tìm thấy camera", 404, ERROR_CODE.NOT_FOUND);
     }
 
-    await this.repository.clearCameraSafetyConfig(cameraId);
+    await this.cameraClient.clearCameraSafetyConfig(cameraId);
     this.cache.invalidateCamera(cameraId);
 
     await this.repository.recordAuditLog({
@@ -312,12 +341,12 @@ export class SafetyRuleService {
     let isCameraOverride = false;
 
     if (query.cameraId) {
-      camera = await this.repository.findCameraById(query.cameraId);
+      camera = await this.cameraClient.findCameraById(query.cameraId);
       if (!camera) {
         throw new AppError("Không tìm thấy camera", 404, ERROR_CODE.NOT_FOUND);
       }
       siteId = camera.siteId;
-      cameraConfig = await this.repository.findCameraConfig(query.cameraId);
+      cameraConfig = await this.cameraClient.findCameraConfig(query.cameraId);
     }
 
     if (!siteId) {
@@ -408,7 +437,7 @@ export class SafetyRuleService {
 
     // Đồng thời resolve model version và restricted areas
     const [modelVersion, restrictedAreas] = await Promise.all([
-      this.repository.findActiveModelVersion(targetModelVersionId),
+      this.reportingClient.findActiveModelVersion(targetModelVersionId),
       this.repository.findRestrictedAreas(siteId, camera?.zoneId),
     ]);
 

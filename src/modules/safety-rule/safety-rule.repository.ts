@@ -1,10 +1,6 @@
 import { sitePrisma } from "../../database/site.client";
-import { cameraPrisma } from "../../database/camera.client";
-import { reportingPrisma } from "../../database/reporting.client";
 import {
   UpdateSiteSafetyConfigDto,
-  UpdateCameraSafetyConfigDto,
-  ResolvedAiModelVersionDto,
   ResolvedRestrictedAreaDto,
 } from "./safety-rule.dto";
 import { DEFAULT_SAFETY_CONFIG } from "./safety-rule.constant";
@@ -17,10 +13,15 @@ export interface SafetyAuditLogger {
   createAuditLog(data: any): Promise<any>;
 }
 
+/**
+ * SafetyRuleRepository — Tầng truy cập dữ liệu thuần túy cho Site & Safety Config
+ *
+ * Tuân thủ Clean Architecture (5 Layers) & Database-per-Service:
+ * - Chỉ tương tác trực tiếp với ppe_site_db qua sitePrisma.
+ * - KHÔNG chứa logic gọi HTTP fetch hay truy vấn chéo database khác.
+ */
 export class SafetyRuleRepository {
   private readonly siteDb = sitePrisma;
-  private readonly cameraDb = cameraPrisma;
-  private readonly reportingDb = reportingPrisma;
   private readonly rbacRepo?: SafetyAuditLogger;
 
   constructor(rbacRepo?: SafetyAuditLogger) {
@@ -96,135 +97,6 @@ export class SafetyRuleRepository {
         updatedBy: updatedBy || null,
       },
     });
-  }
-
-  // ── Camera & Camera Safety Config Overrides ────────────────────────────────
-  async findCameraById(cameraId: string) {
-    return this.cameraDb.camera.findUnique({
-      where: { id: cameraId },
-      select: {
-        id: true,
-        siteId: true,
-        zoneId: true,
-        name: true,
-        code: true,
-        status: true,
-      },
-    });
-  }
-
-  async findCameraConfig(cameraId: string) {
-    return this.cameraDb.cameraConfig.findUnique({
-      where: { cameraId },
-    });
-  }
-
-  async upsertCameraSafetyConfig(
-    cameraId: string,
-    data: UpdateCameraSafetyConfigDto,
-  ) {
-    const updatePayload: Record<string, unknown> = {};
-    if (data.confidenceThreshold !== undefined)
-      updatePayload.confidenceThreshold = data.confidenceThreshold;
-    if (data.confirmationDuration !== undefined)
-      updatePayload.confirmationDuration = data.confirmationDuration;
-    if (data.cooldownDuration !== undefined)
-      updatePayload.cooldownDuration = data.cooldownDuration;
-    if (data.enableNoHelmet !== undefined)
-      updatePayload.enableNoHelmet = data.enableNoHelmet;
-    if (data.enableNoVest !== undefined)
-      updatePayload.enableNoVest = data.enableNoVest;
-    if (data.enableRestrictedArea !== undefined)
-      updatePayload.enableRestrictedArea = data.enableRestrictedArea;
-    if (data.modelVersionId !== undefined)
-      updatePayload.modelVersionId = data.modelVersionId;
-
-    return this.cameraDb.cameraConfig.upsert({
-      where: { cameraId },
-      update: updatePayload,
-      create: {
-        cameraId,
-        enabled: true,
-        captureFps: 10,
-        resolution: "1920x1080",
-        processingEnabled: true,
-        ...updatePayload,
-      },
-    });
-  }
-
-  async clearCameraSafetyConfig(cameraId: string) {
-    return this.cameraDb.cameraConfig.update({
-      where: { cameraId },
-      data: {
-        confidenceThreshold: null,
-        confirmationDuration: null,
-        cooldownDuration: null,
-        enableNoHelmet: null,
-        enableNoVest: null,
-        enableRestrictedArea: null,
-        modelVersionId: null,
-      },
-    });
-  }
-
-  // ── AI Model Version Governance (Reporting DB) ─────────────────────────────
-  async findActiveModelVersion(
-    modelVersionId?: string | null,
-  ): Promise<ResolvedAiModelVersionDto | null> {
-    try {
-      if (modelVersionId) {
-        const version = await this.reportingDb.aiModelVersion.findUnique({
-          where: { id: modelVersionId },
-          include: {
-            model: {
-              select: { name: true, code: true, modelType: true },
-            },
-          },
-        });
-        if (version) {
-          return {
-            id: version.id,
-            modelId: version.modelId,
-            modelName: version.model?.name || "PPE Detector",
-            modelCode: version.model?.code || "YOLO_PPE",
-            version: version.version,
-            framework: version.framework,
-            inputSize: version.inputSize,
-            status: version.status,
-            metrics: version.metrics,
-          };
-        }
-        return null;
-      }
-
-      // Fallback: Tìm bản ghi có status DEPLOYED mới nhất
-      const deployed = await this.reportingDb.aiModelVersion.findFirst({
-        where: { status: "DEPLOYED" },
-        orderBy: { deployedAt: "desc" },
-        include: {
-          model: {
-            select: { name: true, code: true, modelType: true },
-          },
-        },
-      });
-
-      if (!deployed) return null;
-
-      return {
-        id: deployed.id,
-        modelId: deployed.modelId,
-        modelName: deployed.model?.name || "PPE Detector",
-        modelCode: deployed.model?.code || "YOLO_PPE",
-        version: deployed.version,
-        framework: deployed.framework,
-        inputSize: deployed.inputSize,
-        status: deployed.status,
-        metrics: deployed.metrics,
-      };
-    } catch {
-      return null;
-    }
   }
 
   // ── Restricted Areas (Site DB) ─────────────────────────────────────────────

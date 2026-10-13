@@ -10,11 +10,14 @@ const envSchema = z
     PORT: z.coerce.number().int().positive().default(9999),
 
     // ── Database (Database-per-Service Architecture) ─────────────────────────
-    IDENTITY_DATABASE_URL: z
+    IDENTITY_DATABASE_URL: z.string().optional(),
+    SITE_DATABASE_URL: z
       .string()
-      .min(1, "IDENTITY_DATABASE_URL is required"),
-    // Các service DB URLs — optional vì không phải service nào cũng active đồng thời
-    SITE_DATABASE_URL: z.string().optional(),
+      .min(1, "SITE_DATABASE_URL is required")
+      .default(
+        process.env.DATABASE_URL ||
+          "postgresql://site_user:site_password@localhost:5433/site_db?schema=public",
+      ),
     CAMERA_DATABASE_URL: z.string().optional(),
     INCIDENT_DATABASE_URL: z.string().optional(),
     NOTIFICATION_DATABASE_URL: z.string().optional(),
@@ -128,6 +131,11 @@ const envSchema = z
     INCIDENT_PORT: z.coerce.number().int().positive().default(8893),
     INCIDENT_SERVICE_STANDALONE: z.string().default("false"),
     INCIDENT_SERVICE_URL: z.string().default("http://localhost:8893"),
+
+    // ── Reporting Management Service (Database-per-Service Architecture :8894) ─
+    REPORTING_PORT: z.coerce.number().int().positive().default(8894),
+    REPORTING_SERVICE_STANDALONE: z.string().default("false"),
+    REPORTING_SERVICE_URL: z.string().default("http://localhost:8894"),
 
 
 
@@ -364,7 +372,7 @@ export const envConfig = {
   nodeEnv: _env.NODE_ENV,
   port: _env.PORT,
   database: {
-    url: _env.IDENTITY_DATABASE_URL,
+    url: _env.SITE_DATABASE_URL || _env.IDENTITY_DATABASE_URL || "",
     siteUrl: _env.SITE_DATABASE_URL,
     cameraUrl: _env.CAMERA_DATABASE_URL,
     incidentUrl: _env.INCIDENT_DATABASE_URL,
@@ -437,6 +445,11 @@ export const envConfig = {
     port: _env.INCIDENT_PORT,
     standalone: _env.INCIDENT_SERVICE_STANDALONE === "true",
     serviceUrl: _env.INCIDENT_SERVICE_URL,
+  },
+  reporting: {
+    port: _env.REPORTING_PORT,
+    standalone: _env.REPORTING_SERVICE_STANDALONE === "true",
+    serviceUrl: _env.REPORTING_SERVICE_URL,
   },
   minio: {
     endpoint: _env.PPE_MINIO_ENDPOINT,

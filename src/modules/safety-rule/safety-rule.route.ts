@@ -19,8 +19,6 @@ const controller = safetyRuleController;
 // ── 1. System Default ────────────────────────────────────────────────────────
 router.get(
   "/system-default",
-  authMiddleware,
-  requirePermission(PERMISSIONS.PPE_SAFETY_CONFIG_READ),
   controller.getSystemDefault,
 );
 
