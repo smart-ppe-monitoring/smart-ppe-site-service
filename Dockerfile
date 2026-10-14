@@ -1,6 +1,6 @@
 # ── Stage 1: deps ──
 FROM node:22-alpine AS deps
-RUN apk add --no-cache libc6-compat openssl
+RUN apk add --no-cache libc6-compat openssl git
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 COPY package.json ./
@@ -9,7 +9,7 @@ RUN pnpm install
 
 # ── Stage 2: builder ──
 FROM node:22-alpine AS builder
-RUN apk add --no-cache libc6-compat openssl
+RUN apk add --no-cache libc6-compat openssl git
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 COPY --from=deps /app/node_modules ./node_modules
