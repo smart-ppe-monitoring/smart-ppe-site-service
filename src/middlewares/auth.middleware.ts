@@ -59,10 +59,53 @@ export async function authMiddleware(
   }
 
   try {
-    const secret = jwtConfig.publicKey || jwtConfig.accessSecret;
-    const payload = jwt.verify(token, secret, {
-      algorithms: [JWT_ALGORITHM.RS256, JWT_ALGORITHM.HS256],
-    }) as any;
+    const decoded = jwt.decode(token, { complete: true });
+    if (!decoded || typeof decoded !== "object" || !decoded.header) {
+      next(new AppError("Token không hợp lệ", 401, ERROR_CODE.UNAUTHORIZED));
+      return;
+    }
+
+    const { alg } = decoded.header;
+    let payload: any;
+
+    if (alg === JWT_ALGORITHM.RS256) {
+      if (!jwtConfig.publicKey) {
+        next(
+          new AppError(
+            "Cấu hình khóa công khai chưa sẵn sàng",
+            500,
+            ERROR_CODE.INTERNAL_SERVER_ERROR,
+          ),
+        );
+        return;
+      }
+      payload = jwt.verify(token, jwtConfig.publicKey, {
+        algorithms: [JWT_ALGORITHM.RS256],
+      });
+    } else if (alg === JWT_ALGORITHM.HS256) {
+      if (!jwtConfig.accessSecret) {
+        next(
+          new AppError(
+            "Cấu hình secret HS256 chưa sẵn sàng",
+            500,
+            ERROR_CODE.INTERNAL_SERVER_ERROR,
+          ),
+        );
+        return;
+      }
+      payload = jwt.verify(token, jwtConfig.accessSecret, {
+        algorithms: [JWT_ALGORITHM.HS256],
+      });
+    } else {
+      next(
+        new AppError(
+          `Thuật toán '${alg}' không được chấp nhận`,
+          401,
+          ERROR_CODE.UNAUTHORIZED,
+        ),
+      );
+      return;
+    }
 
     if (!payload || typeof payload !== "object") {
       next(new AppError("Token không hợp lệ", 401, ERROR_CODE.UNAUTHORIZED));
