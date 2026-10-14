@@ -18,6 +18,13 @@ import { requestIdMiddleware } from "./middlewares/request-id.middleware";
 import { maintenanceGuard } from "./middlewares/maintenance.middleware";
 import { envConfig } from "./config/env.config";
 import { sitePrisma } from "./database/site.client";
+import { buildOpenApiSpec } from "./config/openapi/openapi.registry";
+import { registerSiteOpenApi } from "./modules/site/site.openapi";
+import { registerSafetyRuleOpenApi } from "./modules/safety-rule/safety-rule.openapi";
+
+// Khởi tạo các định nghĩa OpenAPI
+registerSiteOpenApi();
+registerSafetyRuleOpenApi();
 
 /**
  * Express Application cho Site Management Microservice (:8891)
@@ -110,6 +117,10 @@ siteApp.get("/health", healthHandler);
 siteApp.get("/health/live", (_req, res) => res.status(200).json({ status: "ok" }));
 siteApp.get("/api/v1/sites/health", healthHandler);
 siteApp.get("/sites/health", healthHandler);
+
+// 3.1 OpenAPI Specification Endpoint
+siteApp.get("/openapi.json", (_req, res) => res.status(200).json(buildOpenApiSpec()));
+siteApp.get("/api/v1/sites/openapi.json", (_req, res) => res.status(200).json(buildOpenApiSpec()));
 
 // 4. Mount Site, Zone & Restricted Area Routes
 // Hỗ trợ dual-mount cả prefix /api/v1/sites và /sites khi qua Gateway hoặc gọi trực tiếp
