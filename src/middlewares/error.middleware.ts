@@ -84,10 +84,13 @@ export function errorMiddleware(
     return;
   }
 
-  if (error instanceof Prisma.PrismaClientKnownRequestError) {
-    if (error.code === "P2002") {
+  if (
+    error instanceof Prisma.PrismaClientKnownRequestError ||
+    (error as any)?.name === "PrismaClientKnownRequestError"
+  ) {
+    if ((error as any).code === "P2002") {
       const conflictingFields =
-        (error.meta?.target as string[] | undefined) ?? [];
+        ((error as any).meta?.target as string[] | undefined) ?? [];
       if (conflictingFields.some((f) => f.toLowerCase().includes("slug"))) {
         res.status(409).json({
           success: false,
@@ -105,7 +108,7 @@ export function errorMiddleware(
       return;
     }
 
-    if (error.code === "P2025") {
+    if ((error as any).code === "P2025") {
       res.status(404).json({
         success: false,
         message: "Bản ghi không tồn tại hoặc đã bị xóa",
@@ -114,7 +117,7 @@ export function errorMiddleware(
       return;
     }
 
-    if (error.code === "P2003" || error.code === "P2014") {
+    if ((error as any).code === "P2003" || (error as any).code === "P2014") {
       res.status(400).json({
         success: false,
         message: "Dữ liệu liên kết hoặc ràng buộc quan hệ không hợp lệ",
@@ -124,7 +127,10 @@ export function errorMiddleware(
     }
   }
 
-  if (error instanceof Prisma.PrismaClientValidationError) {
+  if (
+    error instanceof Prisma.PrismaClientValidationError ||
+    (error as any)?.name === "PrismaClientValidationError"
+  ) {
     res.status(400).json({
       success: false,
       message: "Dữ liệu truy vấn không hợp lệ",

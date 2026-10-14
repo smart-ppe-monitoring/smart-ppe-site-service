@@ -59,16 +59,10 @@ export async function authMiddleware(
   }
 
   try {
-    let payload: any;
-    try {
-      const secret = jwtConfig.publicKey || jwtConfig.accessSecret;
-      payload = jwt.verify(token, secret, {
-        algorithms: [JWT_ALGORITHM.RS256, JWT_ALGORITHM.HS256],
-      });
-    } catch {
-      // Cho phép giải mã payload trực tiếp nếu chạy dev hoặc token ký từ Identity
-      payload = jwt.decode(token);
-    }
+    const secret = jwtConfig.publicKey || jwtConfig.accessSecret;
+    const payload = jwt.verify(token, secret, {
+      algorithms: [JWT_ALGORITHM.RS256, JWT_ALGORITHM.HS256],
+    }) as any;
 
     if (!payload || typeof payload !== "object") {
       next(new AppError("Token không hợp lệ", 401, ERROR_CODE.UNAUTHORIZED));

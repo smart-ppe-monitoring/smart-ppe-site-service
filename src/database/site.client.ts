@@ -1,6 +1,8 @@
 import { PrismaClient as SitePrismaClient } from "@prisma/client-site";
 import { envConfig } from "../config/env.config";
 
+export type { SitePrismaClient };
+
 /**
  * Cấu hình timeout mặc định cho interactive transactions của Site Service
  */

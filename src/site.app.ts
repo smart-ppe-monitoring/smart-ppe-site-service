@@ -17,7 +17,7 @@ import { rateLimitMiddleware } from "./middlewares/rate-limit.middleware";
 import { requestIdMiddleware } from "./middlewares/request-id.middleware";
 import { maintenanceGuard } from "./middlewares/maintenance.middleware";
 import { envConfig } from "./config/env.config";
-import { siteRepository } from "./modules/site/site.repository";
+import { sitePrisma } from "./database/site.client";
 
 /**
  * Express Application cho Site Management Microservice (:8891)
@@ -86,7 +86,13 @@ siteApp.use(cookieParser());
 
 // 3. Health check endpoints cho Traefik Gateway & Monitoring
 const healthHandler = async (_req: express.Request, res: express.Response) => {
-  const isHealthy = await siteRepository.checkDatabaseHealth();
+  let isHealthy = false;
+  try {
+    await sitePrisma.$queryRaw`SELECT 1`;
+    isHealthy = true;
+  } catch {
+    isHealthy = false;
+  }
   const dbStatus = isHealthy ? "up" : "down";
 
   res.status(isHealthy ? 200 : 503).json({

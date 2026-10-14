@@ -1,6 +1,7 @@
 import {
   sitePrisma,
   DEFAULT_SITE_TRANSACTION_OPTIONS,
+  SitePrismaClient,
 } from "../../database/site.client";
 import {
   calculatePaginationSkip,
@@ -25,9 +26,9 @@ import {
 } from "../../common/constants/site.constant";
 
 export class SiteRepository {
-  private readonly db: typeof sitePrisma;
+  private readonly db: SitePrismaClient;
 
-  constructor(dbClient?: any) {
+  constructor(dbClient?: SitePrismaClient) {
     this.db = dbClient || sitePrisma;
   }
 
@@ -36,7 +37,7 @@ export class SiteRepository {
     const startDate = data.startDate ? new Date(data.startDate) : undefined;
     const endDate = data.endDate ? new Date(data.endDate) : undefined;
 
-    return (this.db as any).$transaction(
+    return this.db.$transaction(
       async (tx: any) => {
         const site = await tx.site.create({
           data: {
@@ -451,14 +452,14 @@ export class SiteRepository {
   }
 
   async deleteRestrictedArea(id: string) {
-    return (this.db as any).restrictedArea.delete({
+    return this.db.restrictedArea.delete({
       where: { id },
     });
   }
 
   async checkDatabaseHealth(): Promise<boolean> {
     try {
-      await (this.db as any).$queryRaw`SELECT 1`;
+      await this.db.$queryRaw`SELECT 1`;
       return true;
     } catch {
       return false;
