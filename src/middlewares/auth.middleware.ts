@@ -68,44 +68,31 @@ export async function authMiddleware(
     const { alg } = decoded.header;
     let payload: any;
 
-    if (alg === JWT_ALGORITHM.RS256) {
-      if (!jwtConfig.publicKey) {
-        next(
-          new AppError(
-            "Cấu hình khóa công khai chưa sẵn sàng",
-            500,
-            ERROR_CODE.INTERNAL_SERVER_ERROR,
-          ),
-        );
-        return;
-      }
-      payload = jwt.verify(token, jwtConfig.publicKey, {
-        algorithms: [JWT_ALGORITHM.RS256],
-      });
-    } else if (alg === JWT_ALGORITHM.HS256) {
-      if (!jwtConfig.accessSecret) {
-        next(
-          new AppError(
-            "Cấu hình secret HS256 chưa sẵn sàng",
-            500,
-            ERROR_CODE.INTERNAL_SERVER_ERROR,
-          ),
-        );
-        return;
-      }
-      payload = jwt.verify(token, jwtConfig.accessSecret, {
-        algorithms: [JWT_ALGORITHM.HS256],
-      });
-    } else {
+    if (alg !== JWT_ALGORITHM.RS256) {
       next(
         new AppError(
-          `Thuật toán '${alg}' không được chấp nhận`,
+          `Thuật toán '${alg}' không được chấp nhận. Hệ thống chỉ hỗ trợ RS256.`,
           401,
           ERROR_CODE.UNAUTHORIZED,
         ),
       );
       return;
     }
+
+    if (!jwtConfig.publicKey) {
+      next(
+        new AppError(
+          "Cấu hình khóa công khai RS256 chưa sẵn sàng",
+          500,
+          ERROR_CODE.INTERNAL_SERVER_ERROR,
+        ),
+      );
+      return;
+    }
+
+    payload = jwt.verify(token, jwtConfig.publicKey, {
+      algorithms: [JWT_ALGORITHM.RS256],
+    });
 
     if (!payload || typeof payload !== "object") {
       next(new AppError("Token không hợp lệ", 401, ERROR_CODE.UNAUTHORIZED));

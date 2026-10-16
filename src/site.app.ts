@@ -118,9 +118,11 @@ siteApp.get("/health/live", (_req, res) => res.status(200).json({ status: "ok" }
 siteApp.get("/api/v1/sites/health", healthHandler);
 siteApp.get("/sites/health", healthHandler);
 
-// 3.1 OpenAPI Specification Endpoint
-siteApp.get("/openapi.json", (_req, res) => res.status(200).json(buildOpenApiSpec()));
-siteApp.get("/api/v1/sites/openapi.json", (_req, res) => res.status(200).json(buildOpenApiSpec()));
+// 3.1 OpenAPI Specification Endpoint (Chỉ mở trên dev/staging, ẩn trên production)
+if (envConfig.nodeEnv !== "production") {
+  siteApp.get("/openapi.json", (_req, res) => res.status(200).json(buildOpenApiSpec()));
+  siteApp.get("/api/v1/sites/openapi.json", (_req, res) => res.status(200).json(buildOpenApiSpec()));
+}
 
 // 4. Mount Site, Zone & Restricted Area Routes
 // Hỗ trợ dual-mount cả prefix /api/v1/sites và /sites khi qua Gateway hoặc gọi trực tiếp
