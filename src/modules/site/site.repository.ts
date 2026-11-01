@@ -24,6 +24,8 @@ import {
   SITE_STATUS,
   DEFAULT_SAFETY_CONFIG,
 } from "../../common/constants/site.constant";
+import { AppError } from "../../common/errors/app-error";
+import { ERROR_CODE } from "../../common/errors/error-code";
 
 export class SiteRepository {
   private readonly db: SitePrismaClient;
@@ -37,48 +39,60 @@ export class SiteRepository {
     const startDate = data.startDate ? new Date(data.startDate) : undefined;
     const endDate = data.endDate ? new Date(data.endDate) : undefined;
 
-    return this.db.$transaction(
-      async (tx: any) => {
-        const site = await tx.site.create({
-          data: {
-            name: data.name,
-            code: data.code.toUpperCase(),
-            address: data.address,
-            description: data.description,
-            status: data.status || SITE_STATUS.ACTIVE,
-            startDate,
-            endDate,
-          },
-        });
+    try {
+      return await this.db.$transaction(
+        async (tx: any) => {
+          const site = await tx.site.create({
+            data: {
+              name: data.name,
+              code: data.code.toUpperCase(),
+              address: data.address,
+              description: data.description,
+              status: data.status || SITE_STATUS.ACTIVE,
+              startDate,
+              endDate,
+            },
+          });
 
-        // Tự động khởi tạo SiteSafetyConfig mặc định cho công trường mới
-        await tx.siteSafetyConfig.create({
-          data: {
-            siteId: site.id,
-            confidenceThreshold: DEFAULT_SAFETY_CONFIG.confidenceThreshold,
-            confirmationDuration: DEFAULT_SAFETY_CONFIG.confirmationDuration,
-            cooldownDuration: DEFAULT_SAFETY_CONFIG.cooldownDuration,
-            enableNoHelmet: DEFAULT_SAFETY_CONFIG.enableNoHelmet,
-            enableNoVest: DEFAULT_SAFETY_CONFIG.enableNoVest,
-            enableRestrictedArea: DEFAULT_SAFETY_CONFIG.enableRestrictedArea,
-          },
-        });
+          // Tự động khởi tạo SiteSafetyConfig mặc định cho công trường mới
+          await tx.siteSafetyConfig.create({
+            data: {
+              siteId: site.id,
+              confidenceThreshold: DEFAULT_SAFETY_CONFIG.confidenceThreshold,
+              confirmationDuration: DEFAULT_SAFETY_CONFIG.confirmationDuration,
+              cooldownDuration: DEFAULT_SAFETY_CONFIG.cooldownDuration,
+              enableNoHelmet: DEFAULT_SAFETY_CONFIG.enableNoHelmet,
+              enableNoVest: DEFAULT_SAFETY_CONFIG.enableNoVest,
+              enableRestrictedArea: DEFAULT_SAFETY_CONFIG.enableRestrictedArea,
+            },
+          });
 
-        return tx.site.findUnique({
-          where: { id: site.id },
-          include: {
-            safetyConfigs: true,
-            _count: {
-              select: {
-                zones: true,
-                restrictedAreas: true,
+          return tx.site.findUnique({
+            where: { id: site.id },
+            include: {
+              safetyConfigs: true,
+              _count: {
+                select: {
+                  zones: true,
+                  restrictedAreas: true,
+                },
               },
             },
-          },
-        });
-      },
-      DEFAULT_SITE_TRANSACTION_OPTIONS,
-    );
+          });
+        },
+        DEFAULT_SITE_TRANSACTION_OPTIONS,
+      );
+    } catch (err: any) {
+      // SEC-24: Handle concurrent race collisions and Prisma P2002 unique constraint violations
+      if (err.code === "P2002" || (err?.name === "PrismaClientKnownRequestError" && err?.code === "P2002")) {
+        throw new AppError(
+          `Công trường với mã '${data.code.toUpperCase()}' đã tồn tại trong hệ thống`,
+          409,
+          ERROR_CODE.DUPLICATE_ENTRY,
+        );
+      }
+      throw err;
+    }
   }
 
   async findSiteById(id: string) {
@@ -168,19 +182,30 @@ export class SiteRepository {
       updateData.endDate = data.endDate ? new Date(data.endDate) : null;
     }
 
-    return (this.db as any).site.update({
-      where: { id },
-      data: updateData,
-      include: {
-        safetyConfigs: true,
-        _count: {
-          select: {
-            zones: true,
-            restrictedAreas: true,
+    try {
+      return await (this.db as any).site.update({
+        where: { id },
+        data: updateData,
+        include: {
+          safetyConfigs: true,
+          _count: {
+            select: {
+              zones: true,
+              restrictedAreas: true,
+            },
           },
         },
-      },
-    });
+      });
+    } catch (err: any) {
+      if (err.code === "P2002" || (err?.name === "PrismaClientKnownRequestError" && err?.code === "P2002")) {
+        throw new AppError(
+          `Mã công trường '${data.code?.toUpperCase() || ""}' đã được sử dụng bởi công trường khác`,
+          409,
+          ERROR_CODE.DUPLICATE_ENTRY,
+        );
+      }
+      throw err;
+    }
   }
 
   async deleteSite(id: string) {
@@ -198,20 +223,31 @@ export class SiteRepository {
 
   // ── Zone Operations ────────────────────────────────────────────────────────
   async createZone(data: CreateZoneDto) {
-    return (this.db as any).zone.create({
-      data: {
-        siteId: data.siteId,
-        name: data.name,
-        code: data.code.toUpperCase(),
-        description: data.description,
-        status: data.status,
-      },
-      include: {
-        site: {
-          select: { id: true, name: true, code: true },
+    try {
+      return await (this.db as any).zone.create({
+        data: {
+          siteId: data.siteId,
+          name: data.name,
+          code: data.code.toUpperCase(),
+          description: data.description,
+          status: data.status,
         },
-      },
-    });
+        include: {
+          site: {
+            select: { id: true, name: true, code: true },
+          },
+        },
+      });
+    } catch (err: any) {
+      if (err.code === "P2002" || (err?.name === "PrismaClientKnownRequestError" && err?.code === "P2002")) {
+        throw new AppError(
+          `Phân khu với mã '${data.code.toUpperCase()}' đã tồn tại trong công trường này`,
+          409,
+          ERROR_CODE.DUPLICATE_ENTRY,
+        );
+      }
+      throw err;
+    }
   }
 
   async findZoneById(id: string) {
@@ -292,15 +328,26 @@ export class SiteRepository {
       updateData.code = data.code.toUpperCase();
     }
 
-    return (this.db as any).zone.update({
-      where: { id },
-      data: updateData,
-      include: {
-        site: {
-          select: { id: true, name: true, code: true },
+    try {
+      return await (this.db as any).zone.update({
+        where: { id },
+        data: updateData,
+        include: {
+          site: {
+            select: { id: true, name: true, code: true },
+          },
         },
-      },
-    });
+      });
+    } catch (err: any) {
+      if (err.code === "P2002" || (err?.name === "PrismaClientKnownRequestError" && err?.code === "P2002")) {
+        throw new AppError(
+          `Mã phân khu '${data.code?.toUpperCase() || ""}' đã được sử dụng trong công trường này`,
+          409,
+          ERROR_CODE.DUPLICATE_ENTRY,
+        );
+      }
+      throw err;
+    }
   }
 
   async deleteZone(id: string) {

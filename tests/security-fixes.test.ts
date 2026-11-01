@@ -4,7 +4,11 @@ import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { Request, Response } from "express";
 import { requirePermission, requireAnyPermission } from "../src/middlewares/permission.middleware";
-import { authMiddleware } from "../src/middlewares/auth.middleware";
+import {
+  authMiddleware,
+  extractTokenFromRequest,
+  setApiKeyResolver,
+} from "../src/middlewares/auth.middleware";
 import { errorMiddleware } from "../src/middlewares/error.middleware";
 import { createRequireGatewayOrigin } from "../src/middlewares/request-id.middleware";
 import { jwtConfig } from "../src/config/jwt.config";
@@ -1687,6 +1691,288 @@ describe("Security Patches Regression Suite (SEC-01, SEC-02, SEC-03)", () => {
 
       assert.equal(nextCalled, true);
       assert.equal(caughtError, undefined);
+    });
+  });
+
+  // ── SEC-23: Auth Query Token Leak Endpoint Validation ──────────────────────
+  describe("SEC-23: AUTH-QUERY-TOKEN-LEAK-ENDPOINT-VALIDATION", () => {
+    it("should reject request with ?token=... query parameter with 400 VALIDATION_ERROR", async () => {
+      let caughtError: any = null;
+      const req = {
+        query: { token: "leaked-token-in-query" },
+        headers: {},
+        cookies: {},
+      } as unknown as Request;
+
+      await authMiddleware(req, {} as Response, (err) => {
+        caughtError = err;
+      });
+
+      assert.ok(caughtError instanceof AppError);
+      assert.equal(caughtError.statusCode, 400);
+      assert.equal(caughtError.code, ERROR_CODE.VALIDATION_ERROR);
+      assert.match(caughtError.message, /Không được phép truyền token xác thực qua query string/);
+    });
+
+    it("should reject request with ?ticket=... query parameter with 400 VALIDATION_ERROR", async () => {
+      let caughtError: any = null;
+      const req = {
+        query: { ticket: "leaked-ticket-in-query" },
+        headers: {},
+        cookies: {},
+      } as unknown as Request;
+
+      await authMiddleware(req, {} as Response, (err) => {
+        caughtError = err;
+      });
+
+      assert.ok(caughtError instanceof AppError);
+      assert.equal(caughtError.statusCode, 400);
+      assert.equal(caughtError.code, ERROR_CODE.VALIDATION_ERROR);
+      assert.match(caughtError.message, /Không được phép truyền token xác thực qua query string/);
+    });
+
+    it("extractTokenFromRequest should ignore query params and only extract from authorization or cookie", () => {
+      const fromQuery = extractTokenFromRequest({
+        query: { token: "token1", ticket: "ticket1" },
+        headers: {},
+        cookies: {},
+      } as any);
+      assert.equal(fromQuery, undefined);
+
+      const fromBearer = extractTokenFromRequest({
+        headers: { authorization: "Bearer my-jwt-token" },
+        query: {},
+        cookies: {},
+      } as any);
+      assert.equal(fromBearer, "my-jwt-token");
+
+      const fromCookie = extractTokenFromRequest({
+        cookies: { accessToken: "cookie-jwt" },
+        headers: {},
+        query: {},
+      } as any);
+      assert.equal(fromCookie, "cookie-jwt");
+    });
+  });
+
+  // ── SEC-24: Concurrent Site & Zone Creation Unique Race 500 ────────────────
+  describe("SEC-24: CONCURRENT-SITE-CREATION-UNIQUE-RACE-500", () => {
+    it("createSite should catch Prisma P2002 error and throw AppError with 409 DUPLICATE_ENTRY", async () => {
+      const mockPrisma = {
+        $transaction: async () => {
+          const err: any = new Error("Unique constraint failed on the fields: (`code`)");
+          err.code = "P2002";
+          err.name = "PrismaClientKnownRequestError";
+          throw err;
+        },
+      } as any;
+
+      const repo = new SiteRepository(mockPrisma);
+
+      await assert.rejects(
+        async () => {
+          await repo.createSite({
+            name: "Site Race",
+            code: "SITE-RACE",
+          });
+        },
+        (err: any) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.statusCode, 409);
+          assert.equal(err.code, ERROR_CODE.DUPLICATE_ENTRY);
+          assert.match(err.message, /đã tồn tại trong hệ thống/);
+          return true;
+        },
+      );
+    });
+
+    it("createZone should catch Prisma P2002 error and throw AppError with 409 DUPLICATE_ENTRY", async () => {
+      const mockPrisma = {
+        zone: {
+          create: async () => {
+            const err: any = new Error("Unique constraint failed on the fields: (`siteId`,`code`)");
+            err.code = "P2002";
+            throw err;
+          },
+        },
+      } as any;
+
+      const repo = new SiteRepository(mockPrisma);
+
+      await assert.rejects(
+        async () => {
+          await repo.createZone({
+            siteId: "s-1",
+            name: "Zone Race",
+            code: "ZR-01",
+          });
+        },
+        (err: any) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.statusCode, 409);
+          assert.equal(err.code, ERROR_CODE.DUPLICATE_ENTRY);
+          assert.match(err.message, /đã tồn tại trong công trường này/);
+          return true;
+        },
+      );
+    });
+
+    it("updateSite should catch Prisma P2002 error and throw AppError with 409 DUPLICATE_ENTRY", async () => {
+      const mockPrisma = {
+        site: {
+          update: async () => {
+            const err: any = new Error("Unique constraint failed");
+            err.code = "P2002";
+            throw err;
+          },
+        },
+      } as any;
+
+      const repo = new SiteRepository(mockPrisma);
+
+      await assert.rejects(
+        async () => {
+          await repo.updateSite("s-1", { code: "TAKEN-CODE" });
+        },
+        (err: any) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.statusCode, 409);
+          assert.equal(err.code, ERROR_CODE.DUPLICATE_ENTRY);
+          return true;
+        },
+      );
+    });
+
+    it("updateZone should catch Prisma P2002 error and throw AppError with 409 DUPLICATE_ENTRY", async () => {
+      const mockPrisma = {
+        zone: {
+          update: async () => {
+            const err: any = new Error("Unique constraint failed");
+            err.code = "P2002";
+            throw err;
+          },
+        },
+      } as any;
+
+      const repo = new SiteRepository(mockPrisma);
+
+      await assert.rejects(
+        async () => {
+          await repo.updateZone("z-1", { code: "TAKEN-ZONE" });
+        },
+        (err: any) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.statusCode, 409);
+          assert.equal(err.code, ERROR_CODE.DUPLICATE_ENTRY);
+          return true;
+        },
+      );
+    });
+  });
+
+  // ── SEC-25: Dead API Key Authentication Handler ───────────────────────────
+  describe("SEC-25: DEAD-API-KEY-AUTHENTICATION-HANDLER-SILENT-FAIL", () => {
+    it("authMiddleware should authenticate request with x-api-key header and populate req.apiKey and req.user", async () => {
+      setApiKeyResolver((key) => {
+        if (key === "ak_live_integration_test_secret") {
+          return {
+            user: {
+              id: "m2m-service-user",
+              email: "m2m@example.com",
+              role: ROLES.OPERATOR,
+              permissions: [PERMISSIONS.PPE_SITE_READ, PERMISSIONS.PPE_SITE_MANAGE],
+            },
+            apiKey: {
+              id: "key-123",
+              name: "Site Worker M2M Key",
+              prefix: "ak_live_",
+              permissions: [PERMISSIONS.PPE_SITE_READ], // Scoped down
+            },
+          };
+        }
+        return null;
+      });
+
+      const req = {
+        headers: { "x-api-key": "ak_live_integration_test_secret" },
+        query: {},
+        cookies: {},
+      } as unknown as Request;
+
+      let nextCalled = false;
+      let caughtError: any = null;
+      await authMiddleware(req, {} as Response, (err) => {
+        nextCalled = true;
+        caughtError = err;
+      });
+
+      assert.equal(nextCalled, true);
+      assert.equal(caughtError, undefined);
+      assert.equal((req as any).user.id, "m2m-service-user");
+      assert.equal((req as any).apiKey.id, "key-123");
+      assert.deepEqual((req as any).apiKey.permissions, [PERMISSIONS.PPE_SITE_READ]);
+
+      setApiKeyResolver(null);
+    });
+
+    it("authMiddleware should reject request when x-api-key is invalid with 401 UNAUTHORIZED", async () => {
+      setApiKeyResolver(() => null);
+
+      const req = {
+        headers: { "x-api-key": "invalid-random-key" },
+        query: {},
+        cookies: {},
+      } as unknown as Request;
+
+      let caughtError: any = null;
+      await authMiddleware(req, {} as Response, (err) => {
+        caughtError = err;
+      });
+
+      assert.ok(caughtError instanceof AppError);
+      assert.equal(caughtError.statusCode, 401);
+      assert.equal(caughtError.code, ERROR_CODE.UNAUTHORIZED);
+      assert.match(caughtError.message, /API Key không hợp lệ hoặc đã hết hạn/);
+
+      setApiKeyResolver(null);
+    });
+
+    it("authMiddleware should authenticate request with RS256 JWT in x-api-key header", async () => {
+      setApiKeyResolver(null);
+
+      const jwtApiKey = jwt.sign(
+        {
+          sub: "m2m-jwt-sub",
+          email: "jwt-m2m@example.com",
+          role: ROLES.OPERATOR,
+          apiKeyId: "jwt-key-id-456",
+          apiKeyName: "JWT M2M Key",
+          apiKeyPermissions: [PERMISSIONS.PPE_SITE_READ],
+          purpose: JWT_PURPOSE.ACCESS,
+        },
+        privateKey,
+        { algorithm: "RS256", expiresIn: "1h" },
+      );
+
+      const req = {
+        headers: { "x-api-key": jwtApiKey },
+        query: {},
+        cookies: {},
+      } as unknown as Request;
+
+      let nextCalled = false;
+      let caughtError: any = null;
+      await authMiddleware(req, {} as Response, (err) => {
+        nextCalled = true;
+        caughtError = err;
+      });
+
+      assert.equal(nextCalled, true);
+      assert.equal(caughtError, undefined);
+      assert.equal((req as any).user.id, "m2m-jwt-sub");
+      assert.equal((req as any).apiKey.id, "jwt-key-id-456");
+      assert.deepEqual((req as any).apiKey.permissions, [PERMISSIONS.PPE_SITE_READ]);
     });
   });
 });
