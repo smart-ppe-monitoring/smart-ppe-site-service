@@ -35,9 +35,36 @@ export class SiteRepository {
   }
 
   // ── Site Operations ────────────────────────────────────────────────────────
+  private formatSiteRecord(site: any) {
+    if (!site) return site;
+    return {
+      ...site,
+      zoneCount: site._count?.zones ?? (Array.isArray(site.zones) ? site.zones.length : 0),
+      restrictedAreaCount:
+        site._count?.restrictedAreas ??
+        (Array.isArray(site.restrictedAreas) ? site.restrictedAreas.length : 0),
+    };
+  }
+
   async createSite(data: CreateSiteDto) {
     const startDate = data.startDate ? new Date(data.startDate) : undefined;
     const endDate = data.endDate ? new Date(data.endDate) : undefined;
+
+    let contactPerson = data.contactPerson;
+    let contactPhone = data.contactPhone;
+    if (Array.isArray(data.contactOfficers) && data.contactOfficers.length > 0) {
+      const first = data.contactOfficers[0];
+      if (!contactPerson && first?.name) {
+        contactPerson = first.name;
+      }
+      if (!contactPhone) {
+        if (Array.isArray(first?.phones) && first.phones.length > 0) {
+          contactPhone = first.phones[0];
+        } else if (first?.phone) {
+          contactPhone = first.phone;
+        }
+      }
+    }
 
     try {
       return await this.db.$transaction(
@@ -48,6 +75,12 @@ export class SiteRepository {
               code: data.code.toUpperCase(),
               address: data.address,
               description: data.description,
+              contactPerson: contactPerson || null,
+              contactPhone: contactPhone || null,
+              contactOfficers:
+                data.contactOfficers !== undefined
+                  ? (data.contactOfficers as any)
+                  : [],
               status: data.status || SITE_STATUS.ACTIVE,
               startDate,
               endDate,
@@ -67,7 +100,7 @@ export class SiteRepository {
             },
           });
 
-          return tx.site.findUnique({
+          const created = await tx.site.findUnique({
             where: { id: site.id },
             include: {
               safetyConfigs: true,
@@ -79,6 +112,7 @@ export class SiteRepository {
               },
             },
           });
+          return this.formatSiteRecord(created);
         },
         DEFAULT_SITE_TRANSACTION_OPTIONS,
       );
@@ -96,7 +130,7 @@ export class SiteRepository {
   }
 
   async findSiteById(id: string) {
-    return (this.db as any).site.findUnique({
+    const site = await (this.db as any).site.findUnique({
       where: { id },
       include: {
         safetyConfigs: true,
@@ -111,12 +145,14 @@ export class SiteRepository {
         },
       },
     });
+    return site ? this.formatSiteRecord(site) : null;
   }
 
   async findSiteByCode(code: string) {
-    return (this.db as any).site.findUnique({
+    const site = await (this.db as any).site.findUnique({
       where: { code: code.toUpperCase() },
     });
+    return site ? this.formatSiteRecord(site) : null;
   }
 
   async findAllSites(query: SiteQueryDto): Promise<PaginatedResultDto<any>> {
@@ -165,7 +201,7 @@ export class SiteRepository {
     ]);
 
     return {
-      data,
+      data: data.map((item: any) => this.formatSiteRecord(item)),
       meta: formatPaginationMeta(safePage, safeLimit, total),
     };
   }
@@ -181,9 +217,22 @@ export class SiteRepository {
     if (data.endDate !== undefined) {
       updateData.endDate = data.endDate ? new Date(data.endDate) : null;
     }
+    if (Array.isArray(data.contactOfficers) && data.contactOfficers.length > 0) {
+      const first = data.contactOfficers[0];
+      if (updateData.contactPerson === undefined && first?.name) {
+        updateData.contactPerson = first.name;
+      }
+      if (updateData.contactPhone === undefined) {
+        if (Array.isArray(first?.phones) && first.phones.length > 0) {
+          updateData.contactPhone = first.phones[0];
+        } else if (first?.phone) {
+          updateData.contactPhone = first.phone;
+        }
+      }
+    }
 
     try {
-      return await (this.db as any).site.update({
+      const updated = await (this.db as any).site.update({
         where: { id },
         data: updateData,
         include: {
@@ -196,6 +245,7 @@ export class SiteRepository {
           },
         },
       });
+      return this.formatSiteRecord(updated);
     } catch (err: any) {
       if (err.code === "P2002" || (err?.name === "PrismaClientKnownRequestError" && err?.code === "P2002")) {
         throw new AppError(

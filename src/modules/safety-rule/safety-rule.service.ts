@@ -188,8 +188,37 @@ export class SafetyRuleService {
       throw new AppError("Không tìm thấy camera", 404, ERROR_CODE.NOT_FOUND);
     }
 
-    const config = await this.cameraClient.findCameraConfig(cameraId, token);
+    // 1. Tìm trong DB nội bộ của Site Service (Cách 1)
+    const config =
+      typeof this.repository.findCameraSafetyConfig === "function"
+        ? await this.repository.findCameraSafetyConfig(cameraId)
+        : null;
+
     if (!config) {
+      // Fallback sang cameraClient nếu có dữ liệu legacy
+      const remote = await this.cameraClient.findCameraConfig(cameraId, token);
+      if (remote && (remote.confidenceThreshold !== undefined || remote.enableNoHelmet !== undefined)) {
+        return {
+          id: remote.id,
+          cameraId: remote.cameraId,
+          confidenceThreshold:
+            remote.confidenceThreshold !== null && remote.confidenceThreshold !== undefined
+              ? Number(remote.confidenceThreshold)
+              : null,
+          confirmationDuration:
+            remote.confirmationDuration !== null && remote.confirmationDuration !== undefined
+              ? Number(remote.confirmationDuration)
+              : null,
+          cooldownDuration: remote.cooldownDuration ?? null,
+          enableNoHelmet: remote.enableNoHelmet ?? null,
+          enableNoVest: remote.enableNoVest ?? null,
+          enableRestrictedArea: remote.enableRestrictedArea ?? null,
+          modelVersionId: remote.modelVersionId ?? null,
+          createdAt: (remote.createdAt instanceof Date ? remote.createdAt : new Date(remote.createdAt || Date.now())).toISOString(),
+          updatedAt: (remote.updatedAt instanceof Date ? remote.updatedAt : new Date(remote.updatedAt || Date.now())).toISOString(),
+        };
+      }
+
       return {
         id: "",
         cameraId,
@@ -212,14 +241,17 @@ export class SafetyRuleService {
         config.confidenceThreshold !== null && config.confidenceThreshold !== undefined
           ? Number(config.confidenceThreshold)
           : null,
-      confirmationDuration: config.confirmationDuration ?? null,
+      confirmationDuration:
+        config.confirmationDuration !== null && config.confirmationDuration !== undefined
+          ? Number(config.confirmationDuration)
+          : null,
       cooldownDuration: config.cooldownDuration ?? null,
       enableNoHelmet: config.enableNoHelmet ?? null,
       enableNoVest: config.enableNoVest ?? null,
       enableRestrictedArea: config.enableRestrictedArea ?? null,
       modelVersionId: config.modelVersionId ?? null,
-      createdAt: (config.createdAt instanceof Date ? config.createdAt : new Date(config.createdAt || Date.now())).toISOString(),
-      updatedAt: (config.updatedAt instanceof Date ? config.updatedAt : new Date(config.updatedAt || Date.now())).toISOString(),
+      createdAt: config.createdAt.toISOString(),
+      updatedAt: config.updatedAt.toISOString(),
     };
   }
 
@@ -249,11 +281,20 @@ export class SafetyRuleService {
       }
     }
 
-    const updated = await this.cameraClient.upsertCameraSafetyConfig(
-      cameraId,
-      data,
-      token,
-    );
+    let updated: any = null;
+    if (typeof this.repository.upsertCameraSafetyConfig === "function") {
+      updated = await this.repository.upsertCameraSafetyConfig(
+        cameraId,
+        data,
+        actorId,
+      );
+    } else {
+      updated = await this.cameraClient.upsertCameraSafetyConfig(
+        cameraId,
+        data,
+        token,
+      );
+    }
 
     if (!updated) {
       throw new AppError(
@@ -287,7 +328,10 @@ export class SafetyRuleService {
         updated.confidenceThreshold !== null && updated.confidenceThreshold !== undefined
           ? Number(updated.confidenceThreshold)
           : null,
-      confirmationDuration: updated.confirmationDuration ?? null,
+      confirmationDuration:
+        updated.confirmationDuration !== null && updated.confirmationDuration !== undefined
+          ? Number(updated.confirmationDuration)
+          : null,
       cooldownDuration: updated.cooldownDuration ?? null,
       enableNoHelmet: updated.enableNoHelmet ?? null,
       enableNoVest: updated.enableNoVest ?? null,
@@ -309,7 +353,14 @@ export class SafetyRuleService {
       throw new AppError("Không tìm thấy camera", 404, ERROR_CODE.NOT_FOUND);
     }
 
-    await this.cameraClient.clearCameraSafetyConfig(cameraId, token);
+    if (typeof this.repository.deleteCameraSafetyConfig === "function") {
+      await this.repository.deleteCameraSafetyConfig(cameraId);
+    }
+    try {
+      await this.cameraClient.clearCameraSafetyConfig(cameraId, token);
+    } catch {
+      // Ignored
+    }
     this.cache.invalidateCamera(cameraId);
 
     await this.repository.recordAuditLog({
@@ -350,7 +401,8 @@ export class SafetyRuleService {
 
     let siteId = query.siteId;
     let camera: any = null;
-    let cameraConfig: any = null;
+    let cameraSafetyOverride: any = null;
+    let cameraHardware: any = null;
     let isCameraOverride = false;
 
     if (query.cameraId) {
@@ -366,7 +418,15 @@ export class SafetyRuleService {
         );
       }
       siteId = camera.siteId;
-      cameraConfig = await this.cameraClient.findCameraConfig(query.cameraId, token);
+
+      const [localSafety, hardware] = await Promise.all([
+        typeof this.repository.findCameraSafetyConfig === "function"
+          ? this.repository.findCameraSafetyConfig(query.cameraId)
+          : Promise.resolve(null),
+        this.cameraClient.findCameraConfig(query.cameraId, token),
+      ]);
+      cameraSafetyOverride = localSafety;
+      cameraHardware = hardware;
     }
 
     if (!siteId) {
@@ -387,17 +447,18 @@ export class SafetyRuleService {
     }
 
     const siteConfig = await this.repository.findSiteSafetyConfig(siteId);
+    const cameraConfig = cameraSafetyOverride || cameraHardware;
 
     // Kiểm tra xem camera có trường override nào không
     if (
       cameraConfig &&
-      (cameraConfig.confidenceThreshold !== null ||
-        cameraConfig.confirmationDuration !== null ||
-        cameraConfig.cooldownDuration !== null ||
-        cameraConfig.enableNoHelmet !== null ||
-        cameraConfig.enableNoVest !== null ||
-        cameraConfig.enableRestrictedArea !== null ||
-        cameraConfig.modelVersionId !== null)
+      (cameraConfig.confidenceThreshold !== null && cameraConfig.confidenceThreshold !== undefined ||
+        cameraConfig.confirmationDuration !== null && cameraConfig.confirmationDuration !== undefined ||
+        cameraConfig.cooldownDuration !== null && cameraConfig.cooldownDuration !== undefined ||
+        cameraConfig.enableNoHelmet !== null && cameraConfig.enableNoHelmet !== undefined ||
+        cameraConfig.enableNoVest !== null && cameraConfig.enableNoVest !== undefined ||
+        cameraConfig.enableRestrictedArea !== null && cameraConfig.enableRestrictedArea !== undefined ||
+        cameraConfig.modelVersionId !== null && cameraConfig.modelVersionId !== undefined)
     ) {
       isCameraOverride = true;
     }
@@ -415,7 +476,7 @@ export class SafetyRuleService {
     const confirmationDuration =
       cameraConfig?.confirmationDuration !== null &&
       cameraConfig?.confirmationDuration !== undefined
-        ? cameraConfig.confirmationDuration
+        ? Number(cameraConfig.confirmationDuration)
         : (siteConfig?.confirmationDuration ??
           DEFAULT_SAFETY_CONFIG.confirmationDuration);
 
@@ -461,6 +522,10 @@ export class SafetyRuleService {
       this.repository.findRestrictedAreas(siteId, camera?.zoneId),
     ]);
 
+    const captureFps = cameraHardware?.captureFps ?? null;
+    const roiPolygon = cameraHardware?.roiPolygon ?? null;
+    const motionSensitivity = cameraHardware?.motionSensitivity ?? null;
+
     const result: EffectiveSafetyConfigResultDto = {
       siteId,
       siteName: site.name,
@@ -480,6 +545,9 @@ export class SafetyRuleService {
       restrictedAreas,
       source,
       resolvedAt: new Date().toISOString(),
+      captureFps,
+      roiPolygon,
+      motionSensitivity,
     };
 
     // Cache kết quả với hierarchical key để khi invalidate site sẽ tự động dọn sạch camera

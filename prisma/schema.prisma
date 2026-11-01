@@ -14,10 +14,13 @@ model Site {
   code        String    @unique @db.VarChar(50)
   address     String?   @db.Text
   description String?   @db.Text
-  status      String    @default("ACTIVE") @db.VarChar(30)
-  startDate   DateTime? @map("start_date") @db.Date
-  endDate     DateTime? @map("end_date") @db.Date
-  createdAt   DateTime  @default(now()) @map("created_at")
+  status          String    @default("ACTIVE") @db.VarChar(30)
+  startDate       DateTime? @map("start_date") @db.Date
+  endDate         DateTime? @map("end_date") @db.Date
+  contactPerson   String?   @map("contact_person") @db.VarChar(150)
+  contactPhone    String?   @map("contact_phone") @db.VarChar(100)
+  contactOfficers Json?     @default("[]") @map("contact_officers")
+  createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
 
   zones           Zone[]
@@ -55,7 +58,7 @@ model SiteSafetyConfig {
   enableNoHelmet       Boolean  @default(true) @map("enable_no_helmet")
   enableNoVest         Boolean  @default(true) @map("enable_no_vest")
   enableRestrictedArea Boolean  @default(true) @map("enable_restricted_area")
-  modelVersionId       String?  @map("model_version_id") @db.Uuid
+  modelVersionId       String?  @map("model_version_id") @db.VarChar(100)
   updatedBy            String?  @map("updated_by") @db.Uuid
   createdAt            DateTime @default(now()) @map("created_at")
   updatedAt            DateTime @updatedAt @map("updated_at")
@@ -63,6 +66,23 @@ model SiteSafetyConfig {
   site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
   @@map("site_safety_configs")
+}
+
+model CameraSafetyConfig {
+  id                   String   @id @default(dbgenerated("uuid_generate_v7()")) @db.Uuid
+  cameraId             String   @unique @map("camera_id") @db.Uuid
+  confidenceThreshold  Decimal? @map("confidence_threshold") @db.Decimal(5, 4)
+  confirmationDuration Float?   @map("confirmation_duration")
+  cooldownDuration     Int?     @map("cooldown_duration")
+  enableNoHelmet       Boolean? @map("enable_no_helmet")
+  enableNoVest         Boolean? @map("enable_no_vest")
+  enableRestrictedArea Boolean? @map("enable_restricted_area")
+  modelVersionId       String?  @map("model_version_id") @db.VarChar(100)
+  updatedBy            String?  @map("updated_by") @db.Uuid
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@map("camera_safety_configs")
 }
 
 model RestrictedArea {

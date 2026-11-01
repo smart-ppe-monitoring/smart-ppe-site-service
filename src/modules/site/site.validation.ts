@@ -31,6 +31,25 @@ export const siteIdParamOnlySchema = z.object({
 
 const CODE_REGEX = /^[A-Z0-9_-]+$/i;
 
+// ── Contact Officer Schemas ──────────────────────────────────────────────────
+export const contactOfficerSchema = z.object({
+  userId: uuidSchema.nullable().optional(),
+  name: z
+    .string({ required_error: "Tên cán bộ an toàn là bắt buộc" })
+    .trim()
+    .min(2, "Tên cán bộ an toàn phải có ít nhất 2 ký tự")
+    .max(150, "Tên cán bộ an toàn không được vượt quá 150 ký tự"),
+  role: z.string().trim().max(100).nullable().optional(),
+  roleTitle: z.string().trim().max(100).nullable().optional(),
+  phone: z.string().trim().regex(/^(\+84|0)\d{9,10}$/, "Số điện thoại không hợp lệ").nullable().optional(),
+  phones: z
+    .array(z.string().trim().min(5, "Số điện thoại không hợp lệ").max(30))
+    .max(10, "Tối đa 10 số điện thoại")
+    .optional(),
+  email: z.string().trim().email("Email không hợp lệ").max(150).nullable().optional(),
+  isPrimary: z.boolean().optional(),
+});
+
 // ── Site Schemas ─────────────────────────────────────────────────────────────
 const siteBaseSchema = z.object({
   name: z
@@ -46,6 +65,9 @@ const siteBaseSchema = z.object({
     .regex(CODE_REGEX, "Mã công trường chỉ gồm chữ cái, số, gạch dưới và gạch ngang"),
   address: z.string().trim().max(500).optional(),
   description: z.string().trim().max(1000).optional(),
+  contactPerson: z.string().trim().max(150).nullable().optional(),
+  contactPhone: z.string().trim().max(100).nullable().optional(),
+  contactOfficers: z.array(contactOfficerSchema).max(50, "Tối đa 50 cán bộ an toàn").nullable().optional(),
   status: z
     .enum(
       [
@@ -189,6 +211,8 @@ export const zoneQuerySchema = z.object({
 });
 
 // ── Safety Config Schemas ────────────────────────────────────────────────────
+const MODEL_VERSION_REGEX = /^[a-zA-Z0-9._-]+$/;
+
 export const updateSiteSafetyConfigSchema = z
   .object({
     confidenceThreshold: z
@@ -198,8 +222,7 @@ export const updateSiteSafetyConfigSchema = z
       .optional(),
     confirmationDuration: z
       .number()
-      .int()
-      .min(1, "Thời gian xác nhận phải từ 1 đến 60 giây")
+      .min(0.5, "Thời gian xác nhận phải từ 0.5 đến 60 giây")
       .max(60, "Thời gian xác nhận tối đa 60 giây")
       .optional(),
     cooldownDuration: z
@@ -211,6 +234,18 @@ export const updateSiteSafetyConfigSchema = z
     enableNoHelmet: z.boolean().optional(),
     enableNoVest: z.boolean().optional(),
     enableRestrictedArea: z.boolean().optional(),
+    modelVersionId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(
+        MODEL_VERSION_REGEX,
+        "Mã phiên bản mô hình chỉ gồm chữ cái, số, gạch dưới, gạch ngang và dấu chấm",
+      )
+      .refine((val) => !val.includes(".."), "Mã phiên bản không được chứa '..'")
+      .nullable()
+      .optional(),
   })
   .refine(
     (data) => Object.keys(data).length > 0,

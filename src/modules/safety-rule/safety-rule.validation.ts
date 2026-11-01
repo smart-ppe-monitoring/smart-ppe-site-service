@@ -22,6 +22,8 @@ export const cameraIdParamSchema = z.object({
   cameraId: uuidSchema,
 });
 
+const MODEL_VERSION_REGEX = /^[a-zA-Z0-9._-]+$/;
+
 export const updateSiteSafetyConfigSchema = z
   .object({
     confidenceThreshold: z
@@ -37,7 +39,6 @@ export const updateSiteSafetyConfigSchema = z
       .optional(),
     confirmationDuration: z
       .number()
-      .int()
       .min(
         SAFETY_RULE_LIMITS.MIN_CONFIRMATION_DURATION,
         `Thời gian xác nhận tối thiểu là ${SAFETY_RULE_LIMITS.MIN_CONFIRMATION_DURATION} giây`,
@@ -62,7 +63,18 @@ export const updateSiteSafetyConfigSchema = z
     enableNoHelmet: z.boolean().optional(),
     enableNoVest: z.boolean().optional(),
     enableRestrictedArea: z.boolean().optional(),
-    modelVersionId: uuidSchema.nullable().optional(),
+    modelVersionId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(
+        MODEL_VERSION_REGEX,
+        "Mã phiên bản mô hình chỉ gồm chữ cái, số, gạch dưới, gạch ngang và dấu chấm",
+      )
+      .refine((val) => !val.includes(".."), "Mã phiên bản không được chứa '..'")
+      .nullable()
+      .optional(),
   })
   .refine(
     (data) => Object.keys(data).length > 0,
@@ -85,7 +97,6 @@ export const updateCameraSafetyConfigSchema = z
       .optional(),
     confirmationDuration: z
       .number()
-      .int()
       .min(
         SAFETY_RULE_LIMITS.MIN_CONFIRMATION_DURATION,
         `Thời gian xác nhận tối thiểu là ${SAFETY_RULE_LIMITS.MIN_CONFIRMATION_DURATION} giây`,
@@ -112,7 +123,18 @@ export const updateCameraSafetyConfigSchema = z
     enableNoHelmet: z.boolean().nullable().optional(),
     enableNoVest: z.boolean().nullable().optional(),
     enableRestrictedArea: z.boolean().nullable().optional(),
-    modelVersionId: uuidSchema.nullable().optional(),
+    modelVersionId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(
+        MODEL_VERSION_REGEX,
+        "Mã phiên bản mô hình chỉ gồm chữ cái, số, gạch dưới, gạch ngang và dấu chấm",
+      )
+      .refine((val) => !val.includes(".."), "Mã phiên bản không được chứa '..'")
+      .nullable()
+      .optional(),
   })
   .refine(
     (data) => Object.keys(data).length > 0,

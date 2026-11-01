@@ -62,6 +62,9 @@ export interface EffectiveSafetyConfigResultDto {
   };
   modelVersion: ResolvedAiModelVersionDto | null;
   restrictedAreas: ResolvedRestrictedAreaDto[];
+  captureFps?: number;
+  roiPolygon?: any;
+  motionSensitivity?: number;
   source: ConfigResolutionSource;
   resolvedAt: string;
 }

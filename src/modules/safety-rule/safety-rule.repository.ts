@@ -1,6 +1,7 @@
 import { sitePrisma } from "../../database/site.client";
 import {
   UpdateSiteSafetyConfigDto,
+  UpdateCameraSafetyConfigDto,
   ResolvedRestrictedAreaDto,
 } from "./safety-rule.dto";
 import { DEFAULT_SAFETY_CONFIG } from "./safety-rule.constant";
@@ -149,6 +150,67 @@ export class SafetyRuleRepository {
     });
 
     return areas;
+  }
+
+  // ── Camera Safety Config (Site DB - Cách 1) ────────────────────────────────
+  async findCameraSafetyConfig(cameraId: string) {
+    return (this.siteDb as any).cameraSafetyConfig.findUnique({
+      where: { cameraId },
+    });
+  }
+
+  async upsertCameraSafetyConfig(
+    cameraId: string,
+    data: UpdateCameraSafetyConfigDto,
+    updatedBy?: string,
+  ) {
+    const updateData: Record<string, unknown> = {};
+    if (data.confidenceThreshold !== undefined) {
+      updateData.confidenceThreshold = data.confidenceThreshold;
+    }
+    if (data.confirmationDuration !== undefined) {
+      updateData.confirmationDuration = data.confirmationDuration;
+    }
+    if (data.cooldownDuration !== undefined) {
+      updateData.cooldownDuration = data.cooldownDuration;
+    }
+    if (data.enableNoHelmet !== undefined) {
+      updateData.enableNoHelmet = data.enableNoHelmet;
+    }
+    if (data.enableNoVest !== undefined) {
+      updateData.enableNoVest = data.enableNoVest;
+    }
+    if (data.enableRestrictedArea !== undefined) {
+      updateData.enableRestrictedArea = data.enableRestrictedArea;
+    }
+    if (data.modelVersionId !== undefined) {
+      updateData.modelVersionId = data.modelVersionId;
+    }
+    if (updatedBy) {
+      updateData.updatedBy = updatedBy;
+    }
+
+    return (this.siteDb as any).cameraSafetyConfig.upsert({
+      where: { cameraId },
+      update: updateData,
+      create: {
+        cameraId,
+        confidenceThreshold: data.confidenceThreshold ?? null,
+        confirmationDuration: data.confirmationDuration ?? null,
+        cooldownDuration: data.cooldownDuration ?? null,
+        enableNoHelmet: data.enableNoHelmet ?? null,
+        enableNoVest: data.enableNoVest ?? null,
+        enableRestrictedArea: data.enableRestrictedArea ?? null,
+        modelVersionId: data.modelVersionId ?? null,
+        updatedBy: updatedBy || null,
+      },
+    });
+  }
+
+  async deleteCameraSafetyConfig(cameraId: string) {
+    return (this.siteDb as any).cameraSafetyConfig.deleteMany({
+      where: { cameraId },
+    });
   }
 
   // ── Audit Logs ─────────────────────────────────────────────────────────────
