@@ -8,6 +8,11 @@ import { authMiddleware } from "../src/middlewares/auth.middleware";
 import { jwtConfig } from "../src/config/jwt.config";
 import { SiteService } from "../src/modules/site/site.service";
 import { SiteRepository } from "../src/modules/site/site.repository";
+import { SafetyRuleService } from "../src/modules/safety-rule/safety-rule.service";
+import { SafetyRuleCacheService } from "../src/modules/safety-rule/safety-rule-cache.service";
+import { updateSiteSafetyConfigSchema } from "../src/modules/site/site.validation";
+import fs from "node:fs";
+import path from "node:path";
 import { AppError } from "../src/common/errors/app-error";
 import { ERROR_CODE } from "../src/common/errors/error-code";
 import { PERMISSIONS } from "../src/common/constants/permission.constant";
@@ -472,6 +477,230 @@ describe("Security Patches Regression Suite (SEC-01, SEC-02, SEC-03)", () => {
       const result = await service.findAllSites({ page: 1, limit: 10 }, userSiteA);
       assert.equal(result.data.length, 1);
       assert.equal(result.data[0].id, "site-A");
+    });
+  });
+
+  // ── SEC-05: Cross-Site Camera Effective Rule Resolution ───────────────────
+  describe("SEC-05: CROSS-SITE-CAMERA-EFFECTIVE-RULE-CORRUPTION", () => {
+    it("should reject effective config request when camera does not belong to specified siteId", async () => {
+      const mockCameraClient = {
+        findCameraById: async (id: string) => ({
+          id,
+          siteId: "site-B", // Camera belongs to site-B!
+          name: "Camera Beta 1",
+          code: "CAM-B1",
+          zoneId: "zone-B1",
+        }),
+        findCameraConfig: async () => null,
+      };
+
+      const mockReportingClient = {
+        findActiveModelVersion: async () => null,
+      };
+
+      const mockRepo = {
+        findSiteById: async (id: string) => ({ id, name: "Site A", code: "SITE-A" }),
+        findSiteSafetyConfig: async () => null,
+        findRestrictedAreas: async () => [],
+      };
+
+      const cache = new SafetyRuleCacheService();
+      const service = new SafetyRuleService(
+        mockRepo as any,
+        mockCameraClient as any,
+        mockReportingClient as any,
+        cache,
+      );
+
+      await assert.rejects(
+        async () => {
+          await service.getEffectiveConfig({
+            siteId: "site-A",
+            cameraId: "cam-B1", // Caller claims it is in Site A, but camera belongs to Site B!
+          });
+        },
+        (err: any) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.statusCode, 400);
+          assert.equal(err.code, ERROR_CODE.VALIDATION_ERROR);
+          assert.match(err.message, /không thuộc công trường/);
+          return true;
+        },
+      );
+    });
+
+    it("should reject cached camera config when requested with mismatched siteId", async () => {
+      const mockCameraClient = {
+        findCameraById: async () => null,
+        findCameraConfig: async () => null,
+      };
+
+      const mockReportingClient = {
+        findActiveModelVersion: async () => null,
+      };
+
+      const mockRepo = {
+        findSiteById: async () => null,
+        findSiteSafetyConfig: async () => null,
+        findRestrictedAreas: async () => [],
+      };
+
+      const cache = new SafetyRuleCacheService();
+      // Pre-populate cache for camera-1 belonging to site-B
+      cache.set("effective:site:site-B:camera:cam-1", {
+        siteId: "site-B",
+        siteName: "Site B",
+        siteCode: "SITE-B",
+        cameraId: "cam-1",
+        cameraName: "Cam 1",
+        cameraCode: "C-01",
+        confidenceThreshold: 0.8,
+        confirmationDuration: 3,
+        cooldownDuration: 30,
+        rules: {
+          enableNoHelmet: true,
+          enableNoVest: true,
+          enableRestrictedArea: true,
+        },
+        modelVersion: null,
+        restrictedAreas: [],
+        source: "CAMERA_OVERRIDE" as any,
+        resolvedAt: new Date().toISOString(),
+      });
+
+      const service = new SafetyRuleService(
+        mockRepo as any,
+        mockCameraClient as any,
+        mockReportingClient as any,
+        cache,
+      );
+
+      await assert.rejects(
+        async () => {
+          await service.getEffectiveConfig({
+            siteId: "site-A", // Mismatched siteId
+            cameraId: "cam-1",
+          });
+        },
+        (err: any) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.statusCode, 400);
+          assert.equal(err.code, ERROR_CODE.VALIDATION_ERROR);
+          assert.match(err.message, /không thuộc công trường/);
+          return true;
+        },
+      );
+    });
+
+    it("should accept effective config request when camera belongs to specified siteId", async () => {
+      const mockCameraClient = {
+        findCameraById: async (id: string) => ({
+          id,
+          siteId: "site-A",
+          name: "Camera Alpha 1",
+          code: "CAM-A1",
+          zoneId: null,
+        }),
+        findCameraConfig: async () => null,
+      };
+
+      const mockReportingClient = {
+        findActiveModelVersion: async () => null,
+      };
+
+      const mockRepo = {
+        findSiteById: async (id: string) => ({ id, name: "Site A", code: "SITE-A" }),
+        findSiteSafetyConfig: async () => ({
+          siteId: "site-A",
+          confidenceThreshold: 0.85,
+          confirmationDuration: 5,
+          cooldownDuration: 20,
+          enableNoHelmet: true,
+          enableNoVest: false,
+          enableRestrictedArea: true,
+        }),
+        findRestrictedAreas: async () => [],
+      };
+
+      const cache = new SafetyRuleCacheService();
+      const service = new SafetyRuleService(
+        mockRepo as any,
+        mockCameraClient as any,
+        mockReportingClient as any,
+        cache,
+      );
+
+      const result = await service.getEffectiveConfig({
+        siteId: "site-A",
+        cameraId: "cam-A1",
+      });
+
+      assert.equal(result.siteId, "site-A");
+      assert.equal(result.cameraId, "cam-A1");
+      assert.equal(result.confidenceThreshold, 0.85);
+    });
+  });
+
+  // ── SEC-06: Dual Safety Config Endpoints & Cache Invalidation ─────────────
+  describe("SEC-06: DUAL-ENDPOINT-SCHEMA-AND-CACHE-INVALIDATION-SPLIT", () => {
+    it("should invalidate site cache when SiteService.updateSafetyConfig is invoked", async () => {
+      let invalidatedSiteId: string | null = null;
+      const mockCache = {
+        invalidateSite: (siteId: string) => {
+          invalidatedSiteId = siteId;
+        },
+      } as any;
+
+      const mockRepo = {
+        findSiteById: async (id: string) => ({ id, name: "Site Test" }),
+        upsertSafetyConfig: async (siteId: string, data: any) => ({
+          id: "cfg-1",
+          siteId,
+          ...data,
+        }),
+      } as any;
+
+      const service = new SiteService(mockRepo, undefined, mockCache);
+      await service.updateSafetyConfig("site-uuid-123", {
+        confidenceThreshold: 0.9,
+      });
+
+      assert.equal(invalidatedSiteId, "site-uuid-123");
+    });
+
+    it("should reject cooldownDuration exceeding 300 seconds in updateSiteSafetyConfigSchema", () => {
+      const invalid = updateSiteSafetyConfigSchema.safeParse({
+        cooldownDuration: 301,
+      });
+      assert.equal(invalid.success, false);
+      if (!invalid.success) {
+        assert.ok(invalid.error.errors.some((e) => e.message.includes("tối đa 300")));
+      }
+
+      const excessive = updateSiteSafetyConfigSchema.safeParse({
+        cooldownDuration: 3600,
+      });
+      assert.equal(excessive.success, false);
+
+      const valid = updateSiteSafetyConfigSchema.safeParse({
+        cooldownDuration: 300,
+      });
+      assert.equal(valid.success, true);
+    });
+  });
+
+  // ── SEC-07: Database Migration UUIDv7 Stored Procedure ────────────────────
+  describe("SEC-07: MISSING-UUID-V7-STORED-PROCEDURE-IN-INITIAL-MIGRATION", () => {
+    it("should provision pgcrypto extension and uuid_generate_v7() stored procedure in migration.sql", () => {
+      const migrationPath = path.resolve(
+        __dirname,
+        "../prisma/migrations/20261008170815_init_site/migration.sql",
+      );
+      const content = fs.readFileSync(migrationPath, "utf-8");
+
+      assert.match(content, /CREATE\s+EXTENSION\s+IF\s+NOT\s+EXISTS\s+"?pgcrypto"?/i);
+      assert.match(content, /CREATE\s+OR\s+REPLACE\s+FUNCTION\s+uuid_generate_v7\(\)/i);
+      assert.match(content, /RETURNS\s+uuid\s+AS/i);
     });
   });
 });

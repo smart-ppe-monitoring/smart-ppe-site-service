@@ -195,8 +195,8 @@ export const updateSiteSafetyConfigSchema = z
     cooldownDuration: z
       .number()
       .int()
-      .min(5, "Thời gian cooldown phải từ 5 đến 3600 giây")
-      .max(3600, "Thời gian cooldown tối đa 3600 giây")
+      .min(5, "Thời gian cooldown phải từ 5 đến 300 giây")
+      .max(300, "Thời gian cooldown tối đa 300 giây")
       .optional(),
     enableNoHelmet: z.boolean().optional(),
     enableNoVest: z.boolean().optional(),

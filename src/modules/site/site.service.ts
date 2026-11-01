@@ -20,6 +20,10 @@ import {
   AUDIT_ACTION,
   AUDIT_TARGET_TYPE,
 } from "../../common/constants/audit-log.constant";
+import {
+  SafetyRuleCacheService,
+  safetyRuleCacheService,
+} from "../safety-rule/safety-rule-cache.service";
 
 export interface UserContext {
   id?: string;
@@ -46,10 +50,16 @@ export interface SiteAuditLogger {
 export class SiteService {
   private readonly repository: SiteRepository;
   private readonly audit?: SiteAuditLogger;
+  private readonly cache: SafetyRuleCacheService;
 
-  constructor(repository?: SiteRepository, audit?: SiteAuditLogger) {
+  constructor(
+    repository?: SiteRepository,
+    audit?: SiteAuditLogger,
+    cache?: SafetyRuleCacheService,
+  ) {
     this.repository = repository || siteRepository;
     this.audit = audit;
+    this.cache = cache || safetyRuleCacheService;
   }
 
   /**
@@ -334,7 +344,9 @@ export class SiteService {
   ) {
     this.assertSiteAccess(siteId, user);
     await this.findSiteById(siteId, user);
-    return this.repository.upsertSafetyConfig(siteId, data, updatedBy);
+    const result = await this.repository.upsertSafetyConfig(siteId, data, updatedBy);
+    this.cache.invalidateSite(siteId);
+    return result;
   }
 
   // ── Restricted Area Operations ─────────────────────────────────────────────

@@ -332,6 +332,13 @@ export class SafetyRuleService {
         : null;
 
     if (cached) {
+      if (query.siteId && cached.siteId !== query.siteId) {
+        throw new AppError(
+          "Camera không thuộc công trường được chỉ định",
+          400,
+          ERROR_CODE.VALIDATION_ERROR,
+        );
+      }
       return cached;
     }
 
@@ -344,6 +351,13 @@ export class SafetyRuleService {
       camera = await this.cameraClient.findCameraById(query.cameraId);
       if (!camera) {
         throw new AppError("Không tìm thấy camera", 404, ERROR_CODE.NOT_FOUND);
+      }
+      if (query.siteId && camera.siteId !== query.siteId) {
+        throw new AppError(
+          "Camera không thuộc công trường được chỉ định",
+          400,
+          ERROR_CODE.VALIDATION_ERROR,
+        );
       }
       siteId = camera.siteId;
       cameraConfig = await this.cameraClient.findCameraConfig(query.cameraId);
