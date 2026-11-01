@@ -78,9 +78,24 @@ export class SiteController {
   deleteSite = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
-      const result = await this.service.deleteSite(id, false, req.user?.id, req.user);
+      const force = req.query.force === "true";
+      const result = await this.service.deleteSite(id, force, req.user?.id, req.user);
       res.json({
         success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  archiveSite = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      const result = await this.service.archiveSite(id, req.user);
+      res.json({
+        success: true,
+        message: "Lưu trữ công trường thành công",
         data: result,
       });
     } catch (error) {

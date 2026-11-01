@@ -5,6 +5,8 @@ import jwt from "jsonwebtoken";
 import { Request, Response } from "express";
 import { requirePermission, requireAnyPermission } from "../src/middlewares/permission.middleware";
 import { authMiddleware } from "../src/middlewares/auth.middleware";
+import { errorMiddleware } from "../src/middlewares/error.middleware";
+import { createRequireGatewayOrigin } from "../src/middlewares/request-id.middleware";
 import { jwtConfig } from "../src/config/jwt.config";
 import { SiteService } from "../src/modules/site/site.service";
 import { SiteRepository } from "../src/modules/site/site.repository";
@@ -1384,6 +1386,307 @@ describe("Security Patches Regression Suite (SEC-01, SEC-02, SEC-03)", () => {
 
       assert.ok(content.includes("datasources: {"));
       assert.ok(content.includes("db: { url: envConfig.database.url }"));
+    });
+  });
+
+  // ── SEC-19: Unindexed Substring Pattern Matching & Wildcard Injection ─────
+  describe("SEC-19: RESTRICTED-AREA-SEARCH-INJECTION-AND-WILDCARD-DENIAL-OF-SERVICE", () => {
+    it("findAllRestrictedAreas should sanitize SQL wildcard characters and omit unindexed description", async () => {
+      let capturedWhere: any = null;
+      const mockPrisma = {
+        restrictedArea: {
+          count: async (args: any) => {
+            capturedWhere = args.where;
+            return 1;
+          },
+          findMany: async (args: any) => {
+            capturedWhere = args.where;
+            return [{ id: "ra-1", name: "Safe Pit" }];
+          },
+        },
+      } as any;
+
+      const repo = new SiteRepository(mockPrisma);
+      await repo.findAllRestrictedAreas({ search: "danger%_pit" });
+
+      assert.ok(capturedWhere);
+      assert.ok(Array.isArray(capturedWhere.OR));
+      assert.equal(capturedWhere.OR.length, 1);
+      assert.deepEqual(capturedWhere.OR[0], {
+        name: { contains: "danger\\%\\_pit", mode: "insensitive" },
+      });
+    });
+
+    it("findAllZones should sanitize SQL wildcard characters in search query", async () => {
+      let capturedWhere: any = null;
+      const mockPrisma = {
+        zone: {
+          count: async (args: any) => {
+            capturedWhere = args.where;
+            return 1;
+          },
+          findMany: async (args: any) => {
+            capturedWhere = args.where;
+            return [{ id: "z-1", name: "Zone 1" }];
+          },
+        },
+      } as any;
+
+      const repo = new SiteRepository(mockPrisma);
+      await repo.findAllZones({ search: "zone%_code" });
+
+      assert.ok(capturedWhere);
+      assert.deepEqual(capturedWhere.OR, [
+        { name: { contains: "zone\\%\\_code", mode: "insensitive" } },
+        { code: { contains: "zone\\%\\_code", mode: "insensitive" } },
+      ]);
+    });
+
+    it("findAllSites should sanitize SQL wildcard characters in search query", async () => {
+      let capturedWhere: any = null;
+      const mockPrisma = {
+        site: {
+          count: async (args: any) => {
+            capturedWhere = args.where;
+            return 1;
+          },
+          findMany: async (args: any) => {
+            capturedWhere = args.where;
+            return [{ id: "s-1", name: "Site 1" }];
+          },
+        },
+      } as any;
+
+      const repo = new SiteRepository(mockPrisma);
+      await repo.findAllSites({ search: "site%_search" });
+
+      assert.ok(capturedWhere);
+      assert.deepEqual(capturedWhere.OR, [
+        { name: { contains: "site\\%\\_search", mode: "insensitive" } },
+        { code: { contains: "site\\%\\_search", mode: "insensitive" } },
+        { address: { contains: "site\\%\\_search", mode: "insensitive" } },
+      ]);
+    });
+  });
+
+  // ── SEC-20: Site Hard Delete Cascades Orphans Incidents ────────────────────
+  describe("SEC-20: SITE-HARD-DELETE-CASCADES-ORPHANS-INCIDENTS", () => {
+    it("deleteSite without force should archive (soft delete) clean site instead of physical delete", async () => {
+      let archivedCalled = false;
+      let physicalDeleteCalled = false;
+
+      const mockRepo = {
+        findSiteById: async (id: string) => ({
+          id,
+          name: "Clean Site",
+          code: "CS-01",
+          _count: { zones: 0, restrictedAreas: 0 },
+        }),
+        archiveSite: async (id: string) => {
+          archivedCalled = true;
+          return { id, status: SITE_STATUS.ARCHIVED };
+        },
+        deleteSite: async () => {
+          physicalDeleteCalled = true;
+          return {};
+        },
+      } as unknown as SiteRepository;
+
+      const service = new SiteService(mockRepo);
+      const res = await service.deleteSite("site-clean", false);
+
+      assert.equal(archivedCalled, true);
+      assert.equal(physicalDeleteCalled, false);
+      assert.equal(res.status, SITE_STATUS.ARCHIVED);
+    });
+
+    it("deleteSite with force=true should execute physical database deletion", async () => {
+      let physicalDeleteCalled = false;
+
+      const mockRepo = {
+        findSiteById: async (id: string) => ({
+          id,
+          name: "Site To Wipe",
+          code: "SW-01",
+          _count: { zones: 0, restrictedAreas: 0 },
+        }),
+        deleteSite: async (id: string) => {
+          physicalDeleteCalled = true;
+          return { id };
+        },
+      } as unknown as SiteRepository;
+
+      const service = new SiteService(mockRepo);
+      const res = await service.deleteSite("site-wipe", true);
+
+      assert.equal(physicalDeleteCalled, true);
+      assert.equal(res.id, "site-wipe");
+    });
+
+    it("deleteSite should reject site containing active child entities when force=false", async () => {
+      const mockRepo = {
+        findSiteById: async (id: string) => ({
+          id,
+          name: "Parent Site",
+          code: "PS-01",
+          _count: { zones: 3, restrictedAreas: 2 },
+        }),
+      } as unknown as SiteRepository;
+
+      const service = new SiteService(mockRepo);
+
+      await assert.rejects(
+        async () => {
+          await service.deleteSite("site-parent", false);
+        },
+        (err: any) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.statusCode, 400);
+          assert.equal(err.code, ERROR_CODE.VALIDATION_ERROR);
+          assert.match(err.message, /Không thể xóa công trường đang chứa 3 phân khu/);
+          return true;
+        },
+      );
+    });
+
+    it("archiveSite should archive site and record audit log", async () => {
+      let archivedId: string | null = null;
+      let auditLogged = false;
+
+      const mockRepo = {
+        findSiteById: async (id: string) => ({
+          id,
+          name: "Site Alpha",
+          code: "SA-01",
+        }),
+        archiveSite: async (id: string) => {
+          archivedId = id;
+          return { id, status: SITE_STATUS.ARCHIVED };
+        },
+      } as unknown as SiteRepository;
+
+      const mockAudit = {
+        recordLog: async () => {
+          auditLogged = true;
+        },
+      };
+
+      const service = new SiteService(mockRepo, mockAudit as any);
+      const res = await service.archiveSite("site-alpha");
+
+      assert.equal(archivedId, "site-alpha");
+      assert.equal(auditLogged, true);
+      assert.equal(res.status, SITE_STATUS.ARCHIVED);
+    });
+  });
+
+  // ── SEC-21: Unhandled HTTP Headers Sent Exception in Error Middleware ─────
+  describe("SEC-21: UNHANDLED-HTTP-HEADERS-SENT-EXCEPTION-IN-ERROR-MIDDLEWARE", () => {
+    it("errorMiddleware should delegate to next(error) immediately when res.headersSent is true", () => {
+      let nextCalledWith: any = null;
+      let statusCalled = false;
+
+      const mockRes = {
+        headersSent: true,
+        status: () => {
+          statusCalled = true;
+          return mockRes;
+        },
+        json: () => mockRes,
+      } as unknown as Response;
+
+      const testError = new Error("Connection abort mid-stream");
+      errorMiddleware(
+        testError,
+        {} as Request,
+        mockRes,
+        (err) => {
+          nextCalledWith = err;
+        },
+      );
+
+      assert.equal(nextCalledWith, testError);
+      assert.equal(statusCalled, false);
+    });
+
+    it("errorMiddleware should format and send response when res.headersSent is false", () => {
+      let statusSet: number | null = null;
+      let jsonBody: any = null;
+
+      const mockRes = {
+        headersSent: false,
+        status: (code: number) => {
+          statusSet = code;
+          return mockRes;
+        },
+        json: (body: any) => {
+          jsonBody = body;
+          return mockRes;
+        },
+      } as unknown as Response;
+
+      const appError = new AppError("Resource not found", 404, ERROR_CODE.NOT_FOUND);
+      errorMiddleware(
+        appError,
+        {} as Request,
+        mockRes,
+        () => {},
+      );
+
+      assert.equal(statusSet, 404);
+      assert.equal(jsonBody.code, ERROR_CODE.NOT_FOUND);
+      assert.equal(jsonBody.success, false);
+    });
+  });
+
+  // ── SEC-22: Unmounted API Gateway Origin Guard ────────────────────────────
+  describe("SEC-22: UNMOUNTED-API-GATEWAY-ORIGIN-GUARD", () => {
+    it("site.app.ts source should register requireGatewayOrigin on all business pipelines", () => {
+      const appFilePath = path.resolve(__dirname, "../src/site.app.ts");
+      const content = fs.readFileSync(appFilePath, "utf-8");
+
+      assert.match(content, /import\s*\{[^}]*requireGatewayOrigin[^}]*\}\s*from\s*"\.\/middlewares\/request-id\.middleware"/);
+      assert.match(content, /siteApp\.use\(\s*"\/api\/v1\/sites",\s*requireGatewayOrigin/);
+      assert.match(content, /siteApp\.use\(\s*"\/api\/v1\/zones",\s*requireGatewayOrigin/);
+      assert.match(content, /siteApp\.use\(\s*"\/api\/v1\/restricted-areas",\s*requireGatewayOrigin/);
+      assert.match(content, /siteApp\.use\(\s*"\/api\/v1\/safety-rules",\s*requireGatewayOrigin/);
+    });
+
+    it("requireGatewayOrigin should reject direct calls lacking x-gateway-secret when secret is configured", () => {
+      const gatewayGuard = createRequireGatewayOrigin("expected-traefik-secret");
+
+      let caughtError: any = null;
+      const req = {
+        headers: {},
+      } as unknown as Request;
+
+      gatewayGuard(req, {} as Response, (err) => {
+        caughtError = err;
+      });
+
+      assert.ok(caughtError instanceof AppError);
+      assert.equal(caughtError.statusCode, 403);
+      assert.equal(caughtError.code, ERROR_CODE.GATEWAY_REQUIRED);
+    });
+
+    it("requireGatewayOrigin should allow calls with valid x-gateway-secret", () => {
+      const gatewayGuard = createRequireGatewayOrigin("expected-traefik-secret");
+
+      let nextCalled = false;
+      let caughtError: any = null;
+      const req = {
+        headers: {
+          "x-gateway-secret": "expected-traefik-secret",
+        },
+      } as unknown as Request;
+
+      gatewayGuard(req, {} as Response, (err) => {
+        nextCalled = true;
+        caughtError = err;
+      });
+
+      assert.equal(nextCalled, true);
+      assert.equal(caughtError, undefined);
     });
   });
 });

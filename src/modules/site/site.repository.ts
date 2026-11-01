@@ -119,7 +119,7 @@ export class SiteRepository {
       where.id = { in: (query as any).siteIds };
     }
     if (query.search?.trim()) {
-      const search = query.search.trim();
+      const search = query.search.trim().replace(/[%_\\]/g, "\\$&");
       where.OR = [
         { name: { contains: search, mode: "insensitive" } },
         { code: { contains: search, mode: "insensitive" } },
@@ -254,7 +254,7 @@ export class SiteRepository {
       where.status = query.status;
     }
     if (query.search?.trim()) {
-      const search = query.search.trim();
+      const search = query.search.trim().replace(/[%_\\]/g, "\\$&");
       where.OR = [
         { name: { contains: search, mode: "insensitive" } },
         { code: { contains: search, mode: "insensitive" } },
@@ -405,10 +405,10 @@ export class SiteRepository {
       where.status = query.status;
     }
     if (query.search?.trim()) {
-      const search = query.search.trim();
+      // SEC-19: Escape wildcard characters and omit unindexed @db.Text description to prevent sequential table scans
+      const search = query.search.trim().replace(/[%_\\]/g, "\\$&");
       where.OR = [
         { name: { contains: search, mode: "insensitive" } },
-        { description: { contains: search, mode: "insensitive" } },
       ];
     }
 

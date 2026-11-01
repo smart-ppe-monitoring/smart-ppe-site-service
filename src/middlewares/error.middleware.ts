@@ -26,6 +26,11 @@ export function errorMiddleware(
   res: Response,
   next: NextFunction,
 ): void {
+  // SEC-21: Delegate to default Express handler if headers already sent to prevent ERR_HTTP_HEADERS_SENT fatal crash
+  if (res.headersSent) {
+    return next(error);
+  }
+
   // Bắt ZodError tập trung (RFC 7807 / 422)
   if (error instanceof ZodError) {
     const formattedErrors = error.errors.map((e) => ({

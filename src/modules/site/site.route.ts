@@ -66,6 +66,14 @@ siteRouter.delete(
   siteController.deleteSite,
 );
 
+siteRouter.post(
+  "/:id/archive",
+  authMiddleware,
+  requirePermission(PERMISSIONS.PPE_SITE_MANAGE),
+  validate(siteIdParamSchema, "params"),
+  siteController.archiveSite,
+);
+
 // Safety Config
 siteRouter.get(
   "/:id/safety-config",

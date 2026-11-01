@@ -243,6 +243,11 @@ export class SiteService {
       );
     }
 
+    // SEC-20: If not explicitly forced, soft-delete / archive the site to preserve forensic integrity and avoid orphaning remote incidents
+    if (!force) {
+      return this.archiveSite(id, user);
+    }
+
     const deleted = await this.repository.deleteSite(id);
 
     // Ghi AuditLog xóa công trường
@@ -262,8 +267,22 @@ export class SiteService {
 
   async archiveSite(id: string, user?: UserContext) {
     this.assertSiteAccess(id, user);
-    await this.findSiteById(id, user);
-    return this.repository.archiveSite(id);
+    const site = await this.findSiteById(id, user);
+    const archived = await this.repository.archiveSite(id);
+
+    await this.audit?.recordLog({
+      actorId: user?.id,
+      action: AUDIT_ACTION.UPDATE_PPE_SITE,
+      targetType: AUDIT_TARGET_TYPE.PPE_SITE,
+      targetId: id,
+      details: {
+        code: site.code,
+        name: site.name,
+        status: SITE_STATUS.ARCHIVED,
+      },
+    });
+
+    return archived;
   }
 
   // ── Zone Operations ────────────────────────────────────────────────────────

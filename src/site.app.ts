@@ -14,7 +14,10 @@ import {
 } from "./modules/site/site.route";
 import { safetyRuleRouter } from "./modules/safety-rule/safety-rule.route";
 import { rateLimitMiddleware } from "./middlewares/rate-limit.middleware";
-import { requestIdMiddleware } from "./middlewares/request-id.middleware";
+import {
+  requestIdMiddleware,
+  requireGatewayOrigin,
+} from "./middlewares/request-id.middleware";
 import { maintenanceGuard } from "./middlewares/maintenance.middleware";
 import { envConfig } from "./config/env.config";
 import { sitePrisma } from "./database/site.client";
@@ -128,28 +131,44 @@ if (envConfig.nodeEnv !== "production") {
 // Hỗ trợ dual-mount cả prefix /api/v1/sites và /sites khi qua Gateway hoặc gọi trực tiếp
 siteApp.use(
   "/api/v1/sites",
+  requireGatewayOrigin,
   rateLimitMiddleware,
   maintenanceGuard(),
   siteRouter,
 );
-siteApp.use("/sites", rateLimitMiddleware, maintenanceGuard(), siteRouter);
+siteApp.use(
+  "/sites",
+  requireGatewayOrigin,
+  rateLimitMiddleware,
+  maintenanceGuard(),
+  siteRouter,
+);
 
 siteApp.use(
   "/api/v1/zones",
+  requireGatewayOrigin,
   rateLimitMiddleware,
   maintenanceGuard(),
   zoneRouter,
 );
-siteApp.use("/zones", rateLimitMiddleware, maintenanceGuard(), zoneRouter);
+siteApp.use(
+  "/zones",
+  requireGatewayOrigin,
+  rateLimitMiddleware,
+  maintenanceGuard(),
+  zoneRouter,
+);
 
 siteApp.use(
   "/api/v1/restricted-areas",
+  requireGatewayOrigin,
   rateLimitMiddleware,
   maintenanceGuard(),
   restrictedAreaRouter,
 );
 siteApp.use(
   "/restricted-areas",
+  requireGatewayOrigin,
   rateLimitMiddleware,
   maintenanceGuard(),
   restrictedAreaRouter,
@@ -157,12 +176,14 @@ siteApp.use(
 
 siteApp.use(
   "/api/v1/safety-rules",
+  requireGatewayOrigin,
   rateLimitMiddleware,
   maintenanceGuard(),
   safetyRuleRouter,
 );
 siteApp.use(
   "/safety-rules",
+  requireGatewayOrigin,
   rateLimitMiddleware,
   maintenanceGuard(),
   safetyRuleRouter,
