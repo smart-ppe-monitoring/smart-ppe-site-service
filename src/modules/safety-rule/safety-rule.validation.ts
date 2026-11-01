@@ -4,10 +4,15 @@ import { uuidSchema as commonUuidSchema } from "../../common/validations/common.
 
 export const uuidSchema = commonUuidSchema;
 
-export const invalidateCacheSchema = z.object({
-  siteId: uuidSchema.optional(),
-  cameraId: uuidSchema.optional(),
-});
+export const invalidateCacheSchema = z
+  .object({
+    siteId: uuidSchema.optional(),
+    cameraId: uuidSchema.optional(),
+  })
+  .refine(
+    (data) => Boolean(data.siteId || data.cameraId),
+    "Phải cung cấp ít nhất siteId hoặc cameraId để xóa cache",
+  );
 
 export const siteIdParamSchema = z.object({
   siteId: uuidSchema,

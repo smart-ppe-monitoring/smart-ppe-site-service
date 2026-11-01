@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { z } from "zod";
 
-const envSchema = z
+export const envSchema = z
   .object({
     // ── Core ─────────────────────────────────────────────────────────────────
     NODE_ENV: z
@@ -10,7 +10,6 @@ const envSchema = z
     PORT: z.coerce.number().int().positive().default(9999),
 
     // ── Database (Database-per-Service Architecture) ─────────────────────────
-    IDENTITY_DATABASE_URL: z.string().optional(),
     SITE_DATABASE_URL: z
       .string()
       .min(1, "SITE_DATABASE_URL is required")
@@ -18,10 +17,6 @@ const envSchema = z
         process.env.DATABASE_URL ||
           "postgresql://site_user:site_password@localhost:5433/site_db?schema=public",
       ),
-    CAMERA_DATABASE_URL: z.string().optional(),
-    INCIDENT_DATABASE_URL: z.string().optional(),
-    NOTIFICATION_DATABASE_URL: z.string().optional(),
-    REPORTING_DATABASE_URL: z.string().optional(),
 
     // ── JWT ──────────────────────────────────────────────────────────────────
     JWT_ALGORITHM: z.enum(["RS256", "HS256"]).default("RS256"),
@@ -269,16 +264,18 @@ const envSchema = z
       if (env.NODE_ENV !== "production") return true;
       if (env.JWT_ALGORITHM === "RS256") {
         return (
-          typeof env.JWT_PRIVATE_KEY === "string" &&
-          env.JWT_PRIVATE_KEY.trim().length > 0
+          (typeof env.JWT_PUBLIC_KEY === "string" &&
+            env.JWT_PUBLIC_KEY.trim().length > 0) ||
+          (typeof env.AUTH_JWKS_URL === "string" &&
+            env.AUTH_JWKS_URL.trim().length > 0)
         );
       }
       return true;
     },
     {
       message:
-        "JWT_PRIVATE_KEY bắt buộc phải được cấu hình khi JWT_ALGORITHM=RS256 trong môi trường production (định dạng PEM, base64 hoặc đường dẫn file)",
-      path: ["JWT_PRIVATE_KEY"],
+        "JWT_PUBLIC_KEY hoặc AUTH_JWKS_URL bắt buộc phải được cấu hình khi JWT_ALGORITHM=RS256 trong môi trường production (định dạng PEM, base64 hoặc đường dẫn file)",
+      path: ["JWT_PUBLIC_KEY"],
     },
   )
   .refine(
@@ -313,9 +310,13 @@ if (!_parsed.success) {
 const _env = _parsed.data;
 
 /** Phân giải giá trị TRUST_PROXY sang kiểu mà Express chấp nhận */
-function parseTrustProxy(val: string): boolean | number | string | string[] {
-  if (val === "true") return true;
-  if (val === "false") return false;
+export function parseTrustProxy(
+  val?: string,
+): boolean | number | string | string[] {
+  // SEC-36: Khi val === "true", chỉ tin cậy 1 hop proxy (Traefik Ingress Gateway) thay vì true (unlimited hops)
+  // để ngăn chặn kẻ tấn công tự tiêm IP giả vào header X-Forwarded-For để bypass rate limiting.
+  if (!val || val === "false") return false;
+  if (val === "true") return 1;
   if (/^\d+$/.test(val)) return parseInt(val, 10);
   if (val.includes(",")) return val.split(",").map((s) => s.trim());
   return val;
@@ -372,12 +373,7 @@ export const envConfig = {
   nodeEnv: _env.NODE_ENV,
   port: _env.PORT,
   database: {
-    url: _env.SITE_DATABASE_URL || _env.IDENTITY_DATABASE_URL || "",
-    siteUrl: _env.SITE_DATABASE_URL,
-    cameraUrl: _env.CAMERA_DATABASE_URL,
-    incidentUrl: _env.INCIDENT_DATABASE_URL,
-    notificationUrl: _env.NOTIFICATION_DATABASE_URL,
-    reportingUrl: _env.REPORTING_DATABASE_URL,
+    url: _env.SITE_DATABASE_URL || "",
   },
   jwt: {
     algorithm: _env.JWT_ALGORITHM,
@@ -469,6 +465,7 @@ export const envConfig = {
   encryption: {
     key: resolveEncryptionKey(),
   },
+  encryptionKey: resolveEncryptionKey(),
   redis: resolveRedisConfig(),
   webhook: {
     maxAttempts: _env.WEBHOOK_MAX_ATTEMPTS,

@@ -13,11 +13,27 @@ import {
   UpdateRestrictedAreaDto,
   RestrictedAreaQueryDto,
 } from "./site.dto";
-import { DEFAULT_SAFETY_CONFIG } from "../../common/constants/site.constant";
+import { DEFAULT_SAFETY_CONFIG, SITE_STATUS } from "../../common/constants/site.constant";
+import { ROLES } from "../../common/constants/role.constant";
+import { formatPaginationMeta } from "../../common/helpers/pagination.helper";
 import {
   AUDIT_ACTION,
   AUDIT_TARGET_TYPE,
 } from "../../common/constants/audit-log.constant";
+import {
+  SafetyRuleCacheService,
+  safetyRuleCacheService,
+} from "../safety-rule/safety-rule-cache.service";
+
+export interface UserContext {
+  id?: string;
+  email?: string;
+  role?: string;
+  roleId?: string;
+  siteId?: string | null;
+  siteIds?: string[];
+  permissions?: string[];
+}
 
 export interface SiteAuditLogger {
   recordLog(data: {
@@ -31,17 +47,109 @@ export interface SiteAuditLogger {
   }): Promise<any>;
 }
 
+/**
+ * SEC-32: Default Site Audit Logger thực hiện ghi nhật ký kiểm toán có cấu trúc (JSON Structured Logging)
+ * ngăn chặn tình trạng thất thoát audit logs khi site service vận hành.
+ */
+export class DefaultSiteAuditLogger implements SiteAuditLogger {
+  async recordLog(data: {
+    actorId?: string;
+    action: string;
+    targetType: string;
+    targetId: string;
+    details?: any;
+    ipAddress?: string;
+    userAgent?: string;
+  }): Promise<any> {
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      service: "site-service",
+      actorId: data.actorId || "SYSTEM",
+      action: data.action,
+      targetType: data.targetType,
+      targetId: data.targetId,
+      details: data.details,
+      ipAddress: data.ipAddress,
+      userAgent: data.userAgent,
+    };
+    console.log(`[AUDIT] ${JSON.stringify(logEntry)}`);
+    return logEntry;
+  }
+}
+
+export const defaultSiteAuditLogger = new DefaultSiteAuditLogger();
+
 export class SiteService {
   private readonly repository: SiteRepository;
   private readonly audit?: SiteAuditLogger;
+  private readonly cache: SafetyRuleCacheService;
 
-  constructor(repository?: SiteRepository, audit?: SiteAuditLogger) {
+  constructor(
+    repository?: SiteRepository,
+    audit?: SiteAuditLogger,
+    cache?: SafetyRuleCacheService,
+  ) {
     this.repository = repository || siteRepository;
-    this.audit = audit;
+    this.audit = audit !== undefined ? audit : defaultSiteAuditLogger;
+    this.cache = cache || safetyRuleCacheService;
+  }
+
+  /**
+   * Resolves list of siteIds allowed for caller.
+   * Returns null if unrestricted (e.g. Admin or internal caller without user context).
+   */
+  private getAllowedSiteIds(user?: UserContext): string[] | null {
+    if (!user) return null;
+    if (user.role === ROLES.ADMIN || user.role === "ADMIN") return null;
+
+    const allowed = new Set<string>();
+    if (user.siteId) {
+      allowed.add(user.siteId);
+    }
+    if (Array.isArray(user.siteIds)) {
+      for (const sid of user.siteIds) {
+        if (sid) allowed.add(sid);
+      }
+    }
+    return Array.from(allowed);
+  }
+
+  /**
+   * Asserts caller has access to the specified siteId.
+   */
+  private assertSiteAccess(siteId?: string | null, user?: UserContext): void {
+    const allowed = this.getAllowedSiteIds(user);
+    if (allowed === null) {
+      return;
+    }
+    if (!siteId || !allowed.includes(siteId)) {
+      throw new AppError(
+        "Bạn không có quyền truy cập hoặc thực hiện thao tác trên công trường này",
+        403,
+        ERROR_CODE.FORBIDDEN,
+      );
+    }
+  }
+
+  /**
+   * SEC-14: Asserts that the site is active and not archived, completed, or inactive.
+   */
+  private assertSiteActive(site: { status?: string }): void {
+    if (
+      site.status === SITE_STATUS.ARCHIVED ||
+      site.status === SITE_STATUS.COMPLETED ||
+      site.status === SITE_STATUS.INACTIVE
+    ) {
+      throw new AppError(
+        `Không thể thao tác trên công trường đã ${site.status.toLowerCase()}`,
+        400,
+        ERROR_CODE.INVALID_STATE,
+      );
+    }
   }
 
   // ── Site Operations ────────────────────────────────────────────────────────
-  async createSite(data: CreateSiteDto, actorId?: string) {
+  async createSite(data: CreateSiteDto, actorId?: string, _user?: UserContext) {
     const existing = await this.repository.findSiteByCode(data.code);
     if (existing) {
       throw new AppError(
@@ -68,7 +176,8 @@ export class SiteService {
     return created;
   }
 
-  async findSiteById(id: string) {
+  async findSiteById(id: string, user?: UserContext) {
+    this.assertSiteAccess(id, user);
     const site = await this.repository.findSiteById(id);
     if (!site) {
       throw new AppError(
@@ -80,12 +189,48 @@ export class SiteService {
     return site;
   }
 
-  async findAllSites(query: SiteQueryDto) {
+  async findAllSites(query: SiteQueryDto, user?: UserContext) {
+    const allowed = this.getAllowedSiteIds(user);
+    if (allowed !== null) {
+      if (allowed.length === 0) {
+        return {
+          data: [],
+          meta: formatPaginationMeta(
+            Number(query.page) || 1,
+            Number(query.limit) || 20,
+            0,
+          ),
+        };
+      }
+      return this.repository.findAllSites({
+        ...query,
+        siteIds: allowed,
+      } as any);
+    }
     return this.repository.findAllSites(query);
   }
 
-  async updateSite(id: string, data: UpdateSiteDto, actorId?: string) {
-    await this.findSiteById(id);
+  async updateSite(id: string, data: UpdateSiteDto, actorId?: string, user?: UserContext) {
+    this.assertSiteAccess(id, user);
+    const site = await this.findSiteById(id, user);
+
+    // SEC-16: Compare merged effective startDate and endDate to prevent chronological inversion
+    if (data.startDate !== undefined || data.endDate !== undefined) {
+      const effectiveStart = data.startDate !== undefined
+        ? (data.startDate ? new Date(data.startDate) : null)
+        : (site.startDate ? new Date(site.startDate) : null);
+      const effectiveEnd = data.endDate !== undefined
+        ? (data.endDate ? new Date(data.endDate) : null)
+        : (site.endDate ? new Date(site.endDate) : null);
+
+      if (effectiveStart && effectiveEnd && effectiveEnd < effectiveStart) {
+        throw new AppError(
+          "Ngày kết thúc phải lớn hơn hoặc bằng ngày bắt đầu",
+          400,
+          ERROR_CODE.VALIDATION_ERROR,
+        );
+      }
+    }
 
     if (data.code) {
       const existing = await this.repository.findSiteByCode(data.code);
@@ -112,8 +257,9 @@ export class SiteService {
     return updated;
   }
 
-  async deleteSite(id: string, force = false, actorId?: string) {
-    const site = await this.findSiteById(id);
+  async deleteSite(id: string, force = false, actorId?: string, user?: UserContext) {
+    this.assertSiteAccess(id, user);
+    const site = await this.findSiteById(id, user);
 
     const hasChildren =
       (site._count?.zones && site._count.zones > 0) ||
@@ -127,6 +273,11 @@ export class SiteService {
         400,
         ERROR_CODE.VALIDATION_ERROR,
       );
+    }
+
+    // SEC-20: If not explicitly forced, soft-delete / archive the site to preserve forensic integrity and avoid orphaning remote incidents
+    if (!force) {
+      return this.archiveSite(id, user);
     }
 
     const deleted = await this.repository.deleteSite(id);
@@ -146,14 +297,31 @@ export class SiteService {
     return deleted;
   }
 
-  async archiveSite(id: string) {
-    await this.findSiteById(id);
-    return this.repository.archiveSite(id);
+  async archiveSite(id: string, user?: UserContext) {
+    this.assertSiteAccess(id, user);
+    const site = await this.findSiteById(id, user);
+    const archived = await this.repository.archiveSite(id);
+
+    await this.audit?.recordLog({
+      actorId: user?.id,
+      action: AUDIT_ACTION.UPDATE_PPE_SITE,
+      targetType: AUDIT_TARGET_TYPE.PPE_SITE,
+      targetId: id,
+      details: {
+        code: site.code,
+        name: site.name,
+        status: SITE_STATUS.ARCHIVED,
+      },
+    });
+
+    return archived;
   }
 
   // ── Zone Operations ────────────────────────────────────────────────────────
-  async createZone(data: CreateZoneDto) {
-    await this.findSiteById(data.siteId);
+  async createZone(data: CreateZoneDto, user?: UserContext) {
+    this.assertSiteAccess(data.siteId, user);
+    const site = await this.findSiteById(data.siteId, user);
+    this.assertSiteActive(site);
 
     const existing = await this.repository.findZoneByCode(
       data.siteId,
@@ -170,7 +338,7 @@ export class SiteService {
     return this.repository.createZone(data);
   }
 
-  async findZoneById(id: string) {
+  async findZoneById(id: string, user?: UserContext) {
     const zone = await this.repository.findZoneById(id);
     if (!zone) {
       throw new AppError(
@@ -179,18 +347,38 @@ export class SiteService {
         ERROR_CODE.NOT_FOUND,
       );
     }
+    this.assertSiteAccess(zone.siteId, user);
     return zone;
   }
 
-  async findAllZones(query: ZoneQueryDto) {
+  async findAllZones(query: ZoneQueryDto, user?: UserContext) {
     if (query.siteId) {
-      await this.findSiteById(query.siteId);
+      this.assertSiteAccess(query.siteId, user);
+      await this.findSiteById(query.siteId, user);
+    } else {
+      const allowed = this.getAllowedSiteIds(user);
+      if (allowed !== null) {
+        if (allowed.length === 0) {
+          return {
+            data: [],
+            meta: formatPaginationMeta(
+              Number(query.page) || 1,
+              Number(query.limit) || 20,
+              0,
+            ),
+          };
+        }
+        return this.repository.findAllZones({
+          ...query,
+          siteIds: allowed,
+        } as any);
+      }
     }
     return this.repository.findAllZones(query);
   }
 
-  async updateZone(id: string, data: UpdateZoneDto) {
-    const zone = await this.findZoneById(id);
+  async updateZone(id: string, data: UpdateZoneDto, user?: UserContext) {
+    const zone = await this.findZoneById(id, user);
 
     if (data.code) {
       const existing = await this.repository.findZoneByCode(
@@ -209,14 +397,29 @@ export class SiteService {
     return this.repository.updateZone(id, data);
   }
 
-  async deleteZone(id: string) {
-    await this.findZoneById(id);
+  async deleteZone(id: string, force = false, user?: UserContext) {
+    const zone = await this.findZoneById(id, user);
+
+    const count =
+      Array.isArray(zone.restrictedAreas)
+        ? zone.restrictedAreas.length
+        : (zone._count?.restrictedAreas || 0);
+
+    if (count > 0 && !force) {
+      throw new AppError(
+        `Không thể xóa phân khu đang chứa ${count} vùng hạn chế. Vui lòng chuyển hoặc xóa các vùng hạn chế trước để tránh thăng hạng ngoài ý muốn lên toàn công trường.`,
+        400,
+        ERROR_CODE.VALIDATION_ERROR,
+      );
+    }
+
     return this.repository.deleteZone(id);
   }
 
   // ── Safety Config Operations ───────────────────────────────────────────────
-  async getSafetyConfig(siteId: string) {
-    await this.findSiteById(siteId);
+  async getSafetyConfig(siteId: string, user?: UserContext) {
+    this.assertSiteAccess(siteId, user);
+    await this.findSiteById(siteId, user);
 
     const config = await this.repository.findSafetyConfigBySiteId(siteId);
     if (!config) {
@@ -238,20 +441,28 @@ export class SiteService {
     siteId: string,
     data: UpdateSiteSafetyConfigDto,
     updatedBy?: string,
+    user?: UserContext,
   ) {
-    await this.findSiteById(siteId);
-    return this.repository.upsertSafetyConfig(siteId, data, updatedBy);
+    this.assertSiteAccess(siteId, user);
+    const site = await this.findSiteById(siteId, user);
+    this.assertSiteActive(site);
+    const result = await this.repository.upsertSafetyConfig(siteId, data, updatedBy);
+    this.cache.invalidateSite(siteId);
+    return result;
   }
 
   // ── Restricted Area Operations ─────────────────────────────────────────────
-  async createRestrictedArea(data: CreateRestrictedAreaDto) {
-    await this.findSiteById(data.siteId);
+  async createRestrictedArea(data: CreateRestrictedAreaDto, user?: UserContext) {
+    this.assertSiteAccess(data.siteId, user);
+    const site = await this.findSiteById(data.siteId, user);
+    this.assertSiteActive(site);
 
+    // SEC-13: Validate zone belongs to target site using repository query to avoid 404 confusion
     if (data.zoneId) {
-      const zone = await this.findZoneById(data.zoneId);
-      if (zone.siteId !== data.siteId) {
+      const zone = await this.repository.findZoneById(data.zoneId);
+      if (!zone || zone.siteId !== data.siteId) {
         throw new AppError(
-          "Phân khu được chỉ định không thuộc công trường này",
+          "Phân khu được chỉ định không tồn tại hoặc không thuộc công trường này",
           400,
           ERROR_CODE.VALIDATION_ERROR,
         );
@@ -261,7 +472,7 @@ export class SiteService {
     return this.repository.createRestrictedArea(data);
   }
 
-  async findRestrictedAreaById(id: string) {
+  async findRestrictedAreaById(id: string, user?: UserContext) {
     const area = await this.repository.findRestrictedAreaById(id);
     if (!area) {
       throw new AppError(
@@ -270,12 +481,35 @@ export class SiteService {
         ERROR_CODE.NOT_FOUND,
       );
     }
+    this.assertSiteAccess(area.siteId, user);
     return area;
   }
 
-  async findAllRestrictedAreas(query: RestrictedAreaQueryDto) {
+  async findAllRestrictedAreas(
+    query: RestrictedAreaQueryDto,
+    user?: UserContext,
+  ) {
     if (query.siteId) {
-      await this.findSiteById(query.siteId);
+      this.assertSiteAccess(query.siteId, user);
+      await this.findSiteById(query.siteId, user);
+    } else {
+      const allowed = this.getAllowedSiteIds(user);
+      if (allowed !== null) {
+        if (allowed.length === 0) {
+          return {
+            data: [],
+            meta: formatPaginationMeta(
+              Number(query.page) || 1,
+              Number(query.limit) || 20,
+              0,
+            ),
+          };
+        }
+        return this.repository.findAllRestrictedAreas({
+          ...query,
+          siteIds: allowed,
+        } as any);
+      }
     }
     return this.repository.findAllRestrictedAreas(query);
   }
@@ -283,8 +517,10 @@ export class SiteService {
   async findRestrictedAreasByZone(
     zoneId: string,
     query: RestrictedAreaQueryDto,
+    user?: UserContext,
   ) {
-    const zone = await this.findZoneById(zoneId);
+    const zone = await this.findZoneById(zoneId, user);
+    this.assertSiteAccess(zone.siteId, user);
     return this.repository.findAllRestrictedAreas({
       ...query,
       siteId: zone.siteId,
@@ -292,14 +528,14 @@ export class SiteService {
     });
   }
 
-  async updateRestrictedArea(id: string, data: UpdateRestrictedAreaDto) {
-    const area = await this.findRestrictedAreaById(id);
+  async updateRestrictedArea(id: string, data: UpdateRestrictedAreaDto, user?: UserContext) {
+    const area = await this.findRestrictedAreaById(id, user);
 
     if (data.zoneId) {
-      const zone = await this.findZoneById(data.zoneId);
-      if (zone.siteId !== area.siteId) {
+      const zone = await this.repository.findZoneById(data.zoneId);
+      if (!zone || zone.siteId !== area.siteId) {
         throw new AppError(
-          "Phân khu được chỉ định không thuộc công trường của vùng hạn chế này",
+          "Phân khu được chỉ định không tồn tại hoặc không thuộc công trường của vùng hạn chế này",
           400,
           ERROR_CODE.VALIDATION_ERROR,
         );
@@ -309,8 +545,8 @@ export class SiteService {
     return this.repository.updateRestrictedArea(id, data);
   }
 
-  async deleteRestrictedArea(id: string) {
-    await this.findRestrictedAreaById(id);
+  async deleteRestrictedArea(id: string, user?: UserContext) {
+    await this.findRestrictedAreaById(id, user);
     return this.repository.deleteRestrictedArea(id);
   }
 }

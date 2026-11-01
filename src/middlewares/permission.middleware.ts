@@ -91,7 +91,8 @@ export function requirePermission(...permissions: string[]) {
 
       const userPermissions = resolveSatellitePermissions(req);
 
-      if (req.user.role === ROLES.ADMIN || req.user.role === "ADMIN") {
+      // SEC-01: Admin role bypass is disabled when authenticated via API Key to preserve scoped least privilege
+      if (!req.apiKey && (req.user.role === ROLES.ADMIN || req.user.role === "ADMIN")) {
         return next();
       }
 
@@ -122,7 +123,8 @@ export function requireAnyPermission(...permissions: string[]) {
 
       const userPermissions = resolveSatellitePermissions(req);
 
-      if (req.user.role === ROLES.ADMIN || req.user.role === "ADMIN") {
+      // SEC-01: Admin role bypass is disabled when authenticated via API Key to preserve scoped least privilege
+      if (!req.apiKey && (req.user.role === ROLES.ADMIN || req.user.role === "ADMIN")) {
         return next();
       }
 

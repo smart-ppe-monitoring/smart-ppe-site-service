@@ -14,7 +14,10 @@ import {
 } from "./modules/site/site.route";
 import { safetyRuleRouter } from "./modules/safety-rule/safety-rule.route";
 import { rateLimitMiddleware } from "./middlewares/rate-limit.middleware";
-import { requestIdMiddleware } from "./middlewares/request-id.middleware";
+import {
+  requestIdMiddleware,
+  requireGatewayOrigin,
+} from "./middlewares/request-id.middleware";
 import { maintenanceGuard } from "./middlewares/maintenance.middleware";
 import { envConfig } from "./config/env.config";
 import { sitePrisma } from "./database/site.client";
@@ -87,19 +90,41 @@ const corsOptions: cors.CorsOptions = {
 };
 siteApp.use(cors(corsOptions));
 siteApp.use(morgan(envConfig.nodeEnv === "production" ? "combined" : "dev"));
-siteApp.use(express.json({ limit: "2mb" }));
-siteApp.use(express.urlencoded({ extended: true, limit: "2mb" }));
+siteApp.use(express.json({ limit: "100kb" }));
+siteApp.use(express.urlencoded({ extended: false, limit: "50kb" }));
 siteApp.use(cookieParser());
 
 // 3. Health check endpoints cho Traefik Gateway & Monitoring
-const healthHandler = async (_req: express.Request, res: express.Response) => {
-  let isHealthy = false;
-  try {
-    await sitePrisma.$queryRaw`SELECT 1`;
-    isHealthy = true;
-  } catch {
-    isHealthy = false;
+// SEC-37: Cache database health check result for 5 seconds to prevent DB connection pool starvation
+let lastDbCheckTime = 0;
+let cachedDbHealthy = false;
+export const DB_HEALTH_CACHE_TTL_MS = 5000;
+
+export async function checkDatabaseHealth(
+  force = false,
+  queryFn: () => Promise<any> = () => sitePrisma.$queryRaw`SELECT 1`,
+): Promise<boolean> {
+  const now = Date.now();
+  if (!force && now - lastDbCheckTime < DB_HEALTH_CACHE_TTL_MS) {
+    return cachedDbHealthy;
   }
+  try {
+    await queryFn();
+    cachedDbHealthy = true;
+  } catch {
+    cachedDbHealthy = false;
+  }
+  lastDbCheckTime = now;
+  return cachedDbHealthy;
+}
+
+export function resetDatabaseHealthCache(): void {
+  lastDbCheckTime = 0;
+  cachedDbHealthy = false;
+}
+
+const healthHandler = async (_req: express.Request, res: express.Response) => {
+  const isHealthy = await checkDatabaseHealth();
   const dbStatus = isHealthy ? "up" : "down";
 
   res.status(isHealthy ? 200 : 503).json({
@@ -128,28 +153,44 @@ if (envConfig.nodeEnv !== "production") {
 // Hỗ trợ dual-mount cả prefix /api/v1/sites và /sites khi qua Gateway hoặc gọi trực tiếp
 siteApp.use(
   "/api/v1/sites",
+  requireGatewayOrigin,
   rateLimitMiddleware,
   maintenanceGuard(),
   siteRouter,
 );
-siteApp.use("/sites", rateLimitMiddleware, maintenanceGuard(), siteRouter);
+siteApp.use(
+  "/sites",
+  requireGatewayOrigin,
+  rateLimitMiddleware,
+  maintenanceGuard(),
+  siteRouter,
+);
 
 siteApp.use(
   "/api/v1/zones",
+  requireGatewayOrigin,
   rateLimitMiddleware,
   maintenanceGuard(),
   zoneRouter,
 );
-siteApp.use("/zones", rateLimitMiddleware, maintenanceGuard(), zoneRouter);
+siteApp.use(
+  "/zones",
+  requireGatewayOrigin,
+  rateLimitMiddleware,
+  maintenanceGuard(),
+  zoneRouter,
+);
 
 siteApp.use(
   "/api/v1/restricted-areas",
+  requireGatewayOrigin,
   rateLimitMiddleware,
   maintenanceGuard(),
   restrictedAreaRouter,
 );
 siteApp.use(
   "/restricted-areas",
+  requireGatewayOrigin,
   rateLimitMiddleware,
   maintenanceGuard(),
   restrictedAreaRouter,
@@ -157,12 +198,14 @@ siteApp.use(
 
 siteApp.use(
   "/api/v1/safety-rules",
+  requireGatewayOrigin,
   rateLimitMiddleware,
   maintenanceGuard(),
   safetyRuleRouter,
 );
 siteApp.use(
   "/safety-rules",
+  requireGatewayOrigin,
   rateLimitMiddleware,
   maintenanceGuard(),
   safetyRuleRouter,

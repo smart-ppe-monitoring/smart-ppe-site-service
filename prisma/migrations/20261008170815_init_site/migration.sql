@@ -1,3 +1,21 @@
+-- Enable Required Extensions
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- Create RFC 9562 UUIDv7 Generator Function
+CREATE OR REPLACE FUNCTION uuid_generate_v7()
+RETURNS uuid AS $$
+DECLARE
+  unix_time_ms bytea;
+  uuid_bytes bytea;
+BEGIN
+  unix_time_ms = substring(int8send(floor(extract(epoch from clock_timestamp()) * 1000)::bigint) from 3 for 6);
+  uuid_bytes = unix_time_ms || gen_random_bytes(10);
+  uuid_bytes = set_byte(uuid_bytes, 6, (get_byte(uuid_bytes, 6) & 15) | 112);
+  uuid_bytes = set_byte(uuid_bytes, 8, (get_byte(uuid_bytes, 8) & 63) | 128);
+  RETURN encode(uuid_bytes, 'hex')::uuid;
+END;
+$$ LANGUAGE plpgsql VOLATILE;
+
 -- CreateTable
 CREATE TABLE "sites" (
     "id" UUID NOT NULL DEFAULT uuid_generate_v7(),

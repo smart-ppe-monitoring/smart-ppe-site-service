@@ -24,7 +24,7 @@ export class SiteController {
   createSite = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const body = req.body as CreateSiteDto;
-      const result = await this.service.createSite(body, req.user?.id);
+      const result = await this.service.createSite(body, req.user?.id, req.user);
       res.status(201).json({
         success: true,
         data: result,
@@ -37,7 +37,7 @@ export class SiteController {
   findSiteById = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
-      const result = await this.service.findSiteById(id);
+      const result = await this.service.findSiteById(id, req.user);
       res.json({
         success: true,
         data: result,
@@ -50,7 +50,7 @@ export class SiteController {
   findAllSites = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const query = req.query as unknown as SiteQueryDto;
-      const result = await this.service.findAllSites(query);
+      const result = await this.service.findAllSites(query, req.user);
       res.json({
         success: true,
         data: result.data || result.items,
@@ -65,7 +65,7 @@ export class SiteController {
     try {
       const { id } = req.params;
       const body = req.body as UpdateSiteDto;
-      const result = await this.service.updateSite(id, body, req.user?.id);
+      const result = await this.service.updateSite(id, body, req.user?.id, req.user);
       res.json({
         success: true,
         data: result,
@@ -78,9 +78,24 @@ export class SiteController {
   deleteSite = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
-      const result = await this.service.deleteSite(id, false, req.user?.id);
+      const force = req.query.force === "true";
+      const result = await this.service.deleteSite(id, force, req.user?.id, req.user);
       res.json({
         success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  archiveSite = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      const result = await this.service.archiveSite(id, req.user);
+      res.json({
+        success: true,
+        message: "Lưu trữ công trường thành công",
         data: result,
       });
     } catch (error) {
@@ -92,7 +107,7 @@ export class SiteController {
   getSafetyConfig = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
-      const result = await this.service.getSafetyConfig(id);
+      const result = await this.service.getSafetyConfig(id, req.user);
       res.json({
         success: true,
         data: result,
@@ -107,7 +122,7 @@ export class SiteController {
       const { id } = req.params;
       const body = req.body as UpdateSiteSafetyConfigDto;
       const updatedBy = req.user?.id;
-      const result = await this.service.updateSafetyConfig(id, body, updatedBy);
+      const result = await this.service.updateSafetyConfig(id, body, updatedBy, req.user);
       res.json({
         success: true,
         data: result,
@@ -125,7 +140,7 @@ export class SiteController {
       const result = await this.service.findAllZones({
         ...query,
         siteId: id,
-      });
+      }, req.user);
       res.json({
         success: true,
         data: result.data || result.items,
@@ -143,7 +158,7 @@ export class SiteController {
       const result = await this.service.createZone({
         ...body,
         siteId: id,
-      });
+      }, req.user);
       res.status(201).json({
         success: true,
         data: result,
@@ -164,7 +179,7 @@ export class SiteController {
       const result = await this.service.findAllRestrictedAreas({
         ...query,
         siteId: id,
-      });
+      }, req.user);
       res.json({
         success: true,
         data: result.data || result.items,
@@ -186,7 +201,7 @@ export class SiteController {
       const result = await this.service.createRestrictedArea({
         ...body,
         siteId: id,
-      });
+      }, req.user);
       res.status(201).json({
         success: true,
         data: result,
@@ -200,7 +215,7 @@ export class SiteController {
   createZone = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const body = req.body as CreateZoneDto;
-      const result = await this.service.createZone(body);
+      const result = await this.service.createZone(body, req.user);
       res.status(201).json({
         success: true,
         data: result,
@@ -213,7 +228,7 @@ export class SiteController {
   findZoneById = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
-      const result = await this.service.findZoneById(id);
+      const result = await this.service.findZoneById(id, req.user);
       res.json({
         success: true,
         data: result,
@@ -226,7 +241,7 @@ export class SiteController {
   findAllZones = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const query = req.query as unknown as ZoneQueryDto;
-      const result = await this.service.findAllZones(query);
+      const result = await this.service.findAllZones(query, req.user);
       res.json({
         success: true,
         data: result.data || result.items,
@@ -241,7 +256,7 @@ export class SiteController {
     try {
       const { id } = req.params;
       const body = req.body as UpdateZoneDto;
-      const result = await this.service.updateZone(id, body);
+      const result = await this.service.updateZone(id, body, req.user);
       res.json({
         success: true,
         data: result,
@@ -254,7 +269,8 @@ export class SiteController {
   deleteZone = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
-      const result = await this.service.deleteZone(id);
+      const force = req.query.force === "true";
+      const result = await this.service.deleteZone(id, force, req.user);
       res.json({
         success: true,
         data: result,
@@ -272,7 +288,7 @@ export class SiteController {
     try {
       const { id } = req.params;
       const query = req.query as unknown as RestrictedAreaQueryDto;
-      const result = await this.service.findRestrictedAreasByZone(id, query);
+      const result = await this.service.findRestrictedAreasByZone(id, query, req.user);
       res.json({
         success: true,
         data: result.data || result.items,
@@ -291,7 +307,7 @@ export class SiteController {
   ) => {
     try {
       const body = req.body as CreateRestrictedAreaDto;
-      const result = await this.service.createRestrictedArea(body);
+      const result = await this.service.createRestrictedArea(body, req.user);
       res.status(201).json({
         success: true,
         data: result,
@@ -308,7 +324,7 @@ export class SiteController {
   ) => {
     try {
       const { id } = req.params;
-      const result = await this.service.findRestrictedAreaById(id);
+      const result = await this.service.findRestrictedAreaById(id, req.user);
       res.json({
         success: true,
         data: result,
@@ -325,7 +341,7 @@ export class SiteController {
   ) => {
     try {
       const query = req.query as unknown as RestrictedAreaQueryDto;
-      const result = await this.service.findAllRestrictedAreas(query);
+      const result = await this.service.findAllRestrictedAreas(query, req.user);
       res.json({
         success: true,
         data: result.data || result.items,
@@ -344,7 +360,7 @@ export class SiteController {
     try {
       const { id } = req.params;
       const body = req.body as UpdateRestrictedAreaDto;
-      const result = await this.service.updateRestrictedArea(id, body);
+      const result = await this.service.updateRestrictedArea(id, body, req.user);
       res.json({
         success: true,
         data: result,
@@ -361,7 +377,7 @@ export class SiteController {
   ) => {
     try {
       const { id } = req.params;
-      const result = await this.service.deleteRestrictedArea(id);
+      const result = await this.service.deleteRestrictedArea(id, req.user);
       res.json({
         success: true,
         data: result,
