@@ -9,6 +9,12 @@ import {
   extractTokenFromRequest,
   setApiKeyResolver,
 } from "../src/middlewares/auth.middleware";
+import { createRateLimiter } from "../src/middlewares/rate-limit.middleware";
+import {
+  encryptSecret,
+  decryptSecret,
+  getMasterKeyBuffer,
+} from "../src/common/helpers/crypto.helper";
 import { errorMiddleware } from "../src/middlewares/error.middleware";
 import { createRequireGatewayOrigin } from "../src/middlewares/request-id.middleware";
 import { jwtConfig } from "../src/config/jwt.config";
@@ -1973,6 +1979,208 @@ describe("Security Patches Regression Suite (SEC-01, SEC-02, SEC-03)", () => {
       assert.equal((req as any).user.id, "m2m-jwt-sub");
       assert.equal((req as any).apiKey.id, "jwt-key-id-456");
       assert.deepEqual((req as any).apiKey.permissions, [PERMISSIONS.PPE_SITE_READ]);
+    });
+  });
+
+  // ── SEC-26: Dual Express Route Mounting Rate Limiter Canonicalization ──────
+  describe("SEC-26: DUAL-MOUNT-RATE-LIMIT-QUOTA-PARTITIONING", () => {
+    function createMockResponse() {
+      const headers: Record<string, any> = {};
+      let statusCode = 200;
+      let body: any = null;
+      return {
+        headers,
+        get statusCode() {
+          return statusCode;
+        },
+        set statusCode(val: number) {
+          statusCode = val;
+        },
+        get body() {
+          return body;
+        },
+        setHeader(name: string, val: any) {
+          headers[name.toLowerCase()] = val;
+        },
+        status(code: number) {
+          statusCode = code;
+          return this;
+        },
+        json(val: any) {
+          body = val;
+          return this;
+        },
+      };
+    }
+
+    it("should share rate limit counter across dual mounts (/api/v1/sites and /sites)", () => {
+      const limiter = createRateLimiter({
+        windowMs: 60000,
+        maxRequests: 2,
+      });
+
+      const clientIp = "192.168.10.50";
+
+      // 1st request to /api/v1/sites
+      const req1 = { ip: clientIp, baseUrl: "/api/v1/sites", path: "/" } as unknown as Request;
+      const res1 = createMockResponse();
+      let next1 = false;
+      limiter(req1, res1 as unknown as Response, () => {
+        next1 = true;
+      });
+
+      assert.equal(next1, true);
+      assert.equal(res1.headers["x-ratelimit-remaining"], 1);
+
+      // 2nd request to /sites (alternative mount point)
+      const req2 = { ip: clientIp, baseUrl: "/sites", path: "/" } as unknown as Request;
+      const res2 = createMockResponse();
+      let next2 = false;
+      limiter(req2, res2 as unknown as Response, () => {
+        next2 = true;
+      });
+
+      assert.equal(next2, true);
+      assert.equal(res2.headers["x-ratelimit-remaining"], 0);
+
+      // 3rd request to /api/v1/sites must be throttled (429)
+      const req3 = { ip: clientIp, baseUrl: "/api/v1/sites", path: "/" } as unknown as Request;
+      const res3 = createMockResponse();
+      let next3 = false;
+      limiter(req3, res3 as unknown as Response, () => {
+        next3 = true;
+      });
+
+      assert.equal(next3, false);
+      assert.equal(res3.statusCode, 429);
+      assert.equal(res3.body.code, ERROR_CODE.RATE_LIMIT_EXCEEDED);
+
+      // 4th request to /sites must ALSO be throttled (429)
+      const req4 = { ip: clientIp, baseUrl: "/sites", path: "/" } as unknown as Request;
+      const res4 = createMockResponse();
+      let next4 = false;
+      limiter(req4, res4 as unknown as Response, () => {
+        next4 = true;
+      });
+
+      assert.equal(next4, false);
+      assert.equal(res4.statusCode, 429);
+      assert.equal(res4.body.code, ERROR_CODE.RATE_LIMIT_EXCEEDED);
+    });
+
+    it("should canonicalize trailing slashes and version prefixes across routes", () => {
+      const limiter = createRateLimiter({
+        windowMs: 60000,
+        maxRequests: 1,
+      });
+
+      const clientIp = "192.168.10.51";
+
+      const req1 = { ip: clientIp, baseUrl: "/api/v1/zones/", path: "/" } as unknown as Request;
+      const res1 = createMockResponse();
+      let next1 = false;
+      limiter(req1, res1 as unknown as Response, () => {
+        next1 = true;
+      });
+      assert.equal(next1, true);
+
+      const req2 = { ip: clientIp, baseUrl: "/zones", path: "/" } as unknown as Request;
+      const res2 = createMockResponse();
+      let next2 = false;
+      limiter(req2, res2 as unknown as Response, () => {
+        next2 = true;
+      });
+      assert.equal(next2, false);
+      assert.equal(res2.statusCode, 429);
+    });
+
+    it("should honor custom keyGenerator if explicitly configured", () => {
+      const limiter = createRateLimiter({
+        windowMs: 60000,
+        maxRequests: 1,
+        keyGenerator: (req) => `custom-bucket:${(req.headers as any)["x-custom-tenant"]}`,
+      });
+
+      const req1 = {
+        headers: { "x-custom-tenant": "tenant-abc" },
+        ip: "1.1.1.1",
+        baseUrl: "/api/v1/sites",
+      } as unknown as Request;
+      const res1 = createMockResponse();
+      let next1 = false;
+      limiter(req1, res1 as unknown as Response, () => {
+        next1 = true;
+      });
+      assert.equal(next1, true);
+
+      const req2 = {
+        headers: { "x-custom-tenant": "tenant-abc" },
+        ip: "2.2.2.2", // Different IP, but same tenant
+        baseUrl: "/sites",
+      } as unknown as Request;
+      const res2 = createMockResponse();
+      let next2 = false;
+      limiter(req2, res2 as unknown as Response, () => {
+        next2 = true;
+      });
+      assert.equal(next2, false);
+      assert.equal(res2.statusCode, 429);
+    });
+  });
+
+  // ── SEC-27: Cryptographic Helper Master Key Configuration ──────────────────
+  describe("SEC-27: HARDCODED-ENCRYPTION-MASTER-KEY-FALLBACK", () => {
+    it("should encrypt and decrypt secret using envConfig.encryptionKey", () => {
+      const plainText = "db-credential-super-secret-password-xyz-123";
+      const encrypted = encryptSecret(plainText);
+      assert.notEqual(encrypted, plainText);
+      assert.match(encrypted, /^[0-9a-f]+:[0-9a-f]+:[0-9a-f]+$/);
+
+      const decrypted = decryptSecret(encrypted);
+      assert.equal(decrypted, plainText);
+    });
+
+    it("should encrypt and decrypt secret using custom key", () => {
+      const plainText = "third-party-api-token-98765";
+      const customKey = "my-custom-test-encryption-key-32bytes!";
+      const encrypted = encryptSecret(plainText, customKey);
+      assert.notEqual(encrypted, plainText);
+
+      const decrypted = decryptSecret(encrypted, customKey);
+      assert.equal(decrypted, plainText);
+    });
+
+    it("should fail decryption when wrong key is provided", () => {
+      const plainText = "confidential-site-data";
+      const encrypted = encryptSecret(plainText, "key-version-alpha-32-chars-long!");
+
+      assert.throws(() => {
+        decryptSecret(encrypted, "key-version-beta--32-chars-long!");
+      });
+    });
+
+    it("getMasterKeyBuffer should throw if no encryption key is configured", () => {
+      const originalKey = envConfig.encryptionKey;
+      const originalEncKey = (envConfig.encryption as any).key;
+      try {
+        (envConfig as any).encryptionKey = "";
+        (envConfig.encryption as any).key = "";
+        assert.throws(() => {
+          getMasterKeyBuffer();
+        }, /Encryption key is not configured/);
+      } finally {
+        (envConfig as any).encryptionKey = originalKey;
+        (envConfig.encryption as any).key = originalEncKey;
+      }
+    });
+
+    it("should ensure crypto.helper.ts does not contain hardcoded default master key fallback or process.env.ENCRYPTION_KEY", () => {
+      const cryptoHelperPath = path.resolve(__dirname, "../src/common/helpers/crypto.helper.ts");
+      const content = fs.readFileSync(cryptoHelperPath, "utf8");
+
+      assert.equal(content.includes("default-smart-ppe-master-encryption-key-32b"), false);
+      assert.equal(content.includes("process.env.ENCRYPTION_KEY"), false);
+      assert.ok(content.includes("envConfig.encryptionKey"));
     });
   });
 });

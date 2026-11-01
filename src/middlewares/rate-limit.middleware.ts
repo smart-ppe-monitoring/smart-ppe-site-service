@@ -80,7 +80,9 @@ export function createRateLimiter(options: RateLimitOptions = {}) {
     next: NextFunction,
   ): void | Promise<void> => {
     const clientIp = req.ip || req.socket.remoteAddress || "unknown";
-    const routePrefix = req.baseUrl || req.path || "";
+    const rawPrefix = req.baseUrl || req.path || "";
+    const routePrefix =
+      rawPrefix.replace(/^\/api\/v\d+/, "").replace(/\/+$/, "") || "/";
     const key = options.keyGenerator
       ? options.keyGenerator(req)
       : `${clientIp}:${routePrefix}`;

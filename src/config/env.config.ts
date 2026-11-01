@@ -461,6 +461,7 @@ export const envConfig = {
   encryption: {
     key: resolveEncryptionKey(),
   },
+  encryptionKey: resolveEncryptionKey(),
   redis: resolveRedisConfig(),
   webhook: {
     maxAttempts: _env.WEBHOOK_MAX_ATTEMPTS,
