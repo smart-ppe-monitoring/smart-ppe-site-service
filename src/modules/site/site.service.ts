@@ -180,7 +180,25 @@ export class SiteService {
 
   async updateSite(id: string, data: UpdateSiteDto, actorId?: string, user?: UserContext) {
     this.assertSiteAccess(id, user);
-    await this.findSiteById(id, user);
+    const site = await this.findSiteById(id, user);
+
+    // SEC-16: Compare merged effective startDate and endDate to prevent chronological inversion
+    if (data.startDate !== undefined || data.endDate !== undefined) {
+      const effectiveStart = data.startDate !== undefined
+        ? (data.startDate ? new Date(data.startDate) : null)
+        : (site.startDate ? new Date(site.startDate) : null);
+      const effectiveEnd = data.endDate !== undefined
+        ? (data.endDate ? new Date(data.endDate) : null)
+        : (site.endDate ? new Date(site.endDate) : null);
+
+      if (effectiveStart && effectiveEnd && effectiveEnd < effectiveStart) {
+        throw new AppError(
+          "Ngày kết thúc phải lớn hơn hoặc bằng ngày bắt đầu",
+          400,
+          ERROR_CODE.VALIDATION_ERROR,
+        );
+      }
+    }
 
     if (data.code) {
       const existing = await this.repository.findSiteByCode(data.code);

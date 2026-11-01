@@ -10,7 +10,6 @@ export const envSchema = z
     PORT: z.coerce.number().int().positive().default(9999),
 
     // ── Database (Database-per-Service Architecture) ─────────────────────────
-    IDENTITY_DATABASE_URL: z.string().optional(),
     SITE_DATABASE_URL: z
       .string()
       .min(1, "SITE_DATABASE_URL is required")
@@ -18,10 +17,6 @@ export const envSchema = z
         process.env.DATABASE_URL ||
           "postgresql://site_user:site_password@localhost:5433/site_db?schema=public",
       ),
-    CAMERA_DATABASE_URL: z.string().optional(),
-    INCIDENT_DATABASE_URL: z.string().optional(),
-    NOTIFICATION_DATABASE_URL: z.string().optional(),
-    REPORTING_DATABASE_URL: z.string().optional(),
 
     // ── JWT ──────────────────────────────────────────────────────────────────
     JWT_ALGORITHM: z.enum(["RS256", "HS256"]).default("RS256"),
@@ -374,12 +369,7 @@ export const envConfig = {
   nodeEnv: _env.NODE_ENV,
   port: _env.PORT,
   database: {
-    url: _env.SITE_DATABASE_URL || _env.IDENTITY_DATABASE_URL || "",
-    siteUrl: _env.SITE_DATABASE_URL,
-    cameraUrl: _env.CAMERA_DATABASE_URL,
-    incidentUrl: _env.INCIDENT_DATABASE_URL,
-    notificationUrl: _env.NOTIFICATION_DATABASE_URL,
-    reportingUrl: _env.REPORTING_DATABASE_URL,
+    url: _env.SITE_DATABASE_URL || "",
   },
   jwt: {
     algorithm: _env.JWT_ALGORITHM,

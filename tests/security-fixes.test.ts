@@ -11,7 +11,8 @@ import { SiteRepository } from "../src/modules/site/site.repository";
 import { SafetyRuleService } from "../src/modules/safety-rule/safety-rule.service";
 import { SafetyRuleCacheService } from "../src/modules/safety-rule/safety-rule-cache.service";
 import { updateSiteSafetyConfigSchema } from "../src/modules/site/site.validation";
-import { envSchema } from "../src/config/env.config";
+import { invalidateCacheSchema } from "../src/modules/safety-rule/safety-rule.validation";
+import { envSchema, envConfig } from "../src/config/env.config";
 import { CameraServiceClient } from "../src/clients/camera.client";
 import { ReportingServiceClient } from "../src/clients/reporting.client";
 import fs from "node:fs";
@@ -1196,6 +1197,193 @@ describe("Security Patches Regression Suite (SEC-01, SEC-02, SEC-03)", () => {
 
       assert.equal(res.id, "zone-new-uuid");
       assert.equal(createdData.code, "AZ-01");
+    });
+  });
+
+  // ── SEC-15: Global Cache Purge Stampede DoS ────────────────────────────────
+  describe("SEC-15: GLOBAL-CACHE-PURGE-STAMPEDE-DOS", () => {
+    it("should reject empty payload in invalidateCacheSchema", () => {
+      const result = invalidateCacheSchema.safeParse({});
+      assert.equal(result.success, false);
+      if (!result.success) {
+        assert.match(
+          result.error.issues[0].message,
+          /Phải cung cấp ít nhất siteId hoặc cameraId để xóa cache/,
+        );
+      }
+    });
+
+    it("should accept payload with siteId or cameraId in invalidateCacheSchema", () => {
+      const validSite = invalidateCacheSchema.safeParse({
+        siteId: "018f3a2b-1234-7000-8000-000000000001",
+      });
+      assert.equal(validSite.success, true);
+
+      const validCamera = invalidateCacheSchema.safeParse({
+        cameraId: "018f3a2b-1234-7000-8000-000000000002",
+      });
+      assert.equal(validCamera.success, true);
+    });
+
+    it("SafetyRuleService.clearCache should reject when neither siteId nor cameraId is provided", () => {
+      const mockCache = {
+        invalidateCamera: () => {},
+        invalidateSite: () => {},
+        clear: () => {},
+      } as any;
+
+      const service = new SafetyRuleService({} as any, {} as any, {} as any, mockCache);
+
+      assert.throws(
+        () => {
+          service.clearCache();
+        },
+        (err: any) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.statusCode, 400);
+          assert.equal(err.code, ERROR_CODE.VALIDATION_ERROR);
+          assert.match(err.message, /Phải cung cấp ít nhất siteId hoặc cameraId/);
+          return true;
+        },
+      );
+    });
+
+    it("SafetyRuleService.clearCache should invalidate targeted site or camera", () => {
+      let invalidatedSiteId: string | null = null;
+      let invalidatedCameraId: string | null = null;
+
+      const mockCache = {
+        invalidateCamera: (id: string) => {
+          invalidatedCameraId = id;
+        },
+        invalidateSite: (id: string) => {
+          invalidatedSiteId = id;
+        },
+        clear: () => {},
+      } as any;
+
+      const service = new SafetyRuleService({} as any, {} as any, {} as any, mockCache);
+
+      service.clearCache("site-123", undefined);
+      assert.equal(invalidatedSiteId, "site-123");
+
+      service.clearCache(undefined, "cam-456");
+      assert.equal(invalidatedCameraId, "cam-456");
+    });
+  });
+
+  // ── SEC-16: Inverted Date Range Lifecycle Mutation Bypass ──────────────────
+  describe("SEC-16: INVERTED-DATE-RANGE-LIFECYCLE-MUTATION-BYPASS", () => {
+    it("should reject partial update when new endDate is before existing startDate", async () => {
+      const mockRepo = {
+        findSiteById: async (id: string) => ({
+          id,
+          name: "Site Alpha",
+          startDate: new Date("2026-06-01T00:00:00.000Z"),
+          endDate: new Date("2026-12-31T00:00:00.000Z"),
+        }),
+        updateSite: async (id: string, data: any) => ({ id, ...data }),
+      } as unknown as SiteRepository;
+
+      const service = new SiteService(mockRepo);
+
+      await assert.rejects(
+        async () => {
+          await service.updateSite("site-1", {
+            endDate: new Date("2026-01-01T00:00:00.000Z") as any,
+          });
+        },
+        (err: any) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.statusCode, 400);
+          assert.equal(err.code, ERROR_CODE.VALIDATION_ERROR);
+          assert.match(err.message, /Ngày kết thúc phải lớn hơn hoặc bằng ngày bắt đầu/);
+          return true;
+        },
+      );
+    });
+
+    it("should reject partial update when new startDate is after existing endDate", async () => {
+      const mockRepo = {
+        findSiteById: async (id: string) => ({
+          id,
+          name: "Site Beta",
+          startDate: new Date("2026-01-01T00:00:00.000Z"),
+          endDate: new Date("2026-06-01T00:00:00.000Z"),
+        }),
+        updateSite: async (id: string, data: any) => ({ id, ...data }),
+      } as unknown as SiteRepository;
+
+      const service = new SiteService(mockRepo);
+
+      await assert.rejects(
+        async () => {
+          await service.updateSite("site-2", {
+            startDate: new Date("2026-09-01T00:00:00.000Z") as any,
+          });
+        },
+        (err: any) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.statusCode, 400);
+          assert.equal(err.code, ERROR_CODE.VALIDATION_ERROR);
+          assert.match(err.message, /Ngày kết thúc phải lớn hơn hoặc bằng ngày bắt đầu/);
+          return true;
+        },
+      );
+    });
+
+    it("should allow partial date update when effective range is valid", async () => {
+      let updatedData: any = null;
+      const mockRepo = {
+        findSiteById: async (id: string) => ({
+          id,
+          name: "Site Gamma",
+          startDate: new Date("2026-01-01T00:00:00.000Z"),
+          endDate: new Date("2026-06-01T00:00:00.000Z"),
+        }),
+        updateSite: async (id: string, data: any) => {
+          updatedData = data;
+          return { id, ...data };
+        },
+      } as unknown as SiteRepository;
+
+      const service = new SiteService(mockRepo);
+      const res = await service.updateSite("site-3", {
+        endDate: new Date("2026-10-01T00:00:00.000Z") as any,
+      });
+
+      assert.equal(res.id, "site-3");
+      assert.ok(updatedData.endDate);
+    });
+  });
+
+  // ── SEC-17: Multi-Repo Database URL Credential Leakage ─────────────────────
+  describe("SEC-17: MULTI-REPO-DATABASE-URL-CREDENTIAL-LEAKAGE", () => {
+    it("envConfig.database should only expose isolated Site URL and omit foreign service URLs", () => {
+      assert.ok(envConfig.database.url);
+      assert.equal((envConfig.database as any).cameraUrl, undefined);
+      assert.equal((envConfig.database as any).incidentUrl, undefined);
+      assert.equal((envConfig.database as any).notificationUrl, undefined);
+      assert.equal((envConfig.database as any).reportingUrl, undefined);
+      assert.equal((envConfig.database as any).siteUrl, undefined);
+    });
+
+    it("envSchema should not mandate foreign database URLs", () => {
+      const parsed = envSchema.safeParse({
+        SITE_DATABASE_URL: "postgresql://site:pass@localhost:5433/ppe_site_db",
+      });
+      assert.equal(parsed.success, true);
+    });
+  });
+
+  // ── SEC-18: Prisma Client Constructor Ignores Dynamic Database URL ─────────
+  describe("SEC-18: PRISMA-CLIENT-CONSTRUCTOR-IGNORES-DYNAMIC-DATABASE-URL", () => {
+    it("site.client.ts source code should pass datasources with envConfig.database.url", () => {
+      const clientFilePath = path.resolve(__dirname, "../src/database/site.client.ts");
+      const content = fs.readFileSync(clientFilePath, "utf-8");
+
+      assert.ok(content.includes("datasources: {"));
+      assert.ok(content.includes("db: { url: envConfig.database.url }"));
     });
   });
 });

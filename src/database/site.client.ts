@@ -16,6 +16,9 @@ let _sitePrisma: SitePrismaClient | null = null;
 export function getSitePrisma(): SitePrismaClient {
   if (!_sitePrisma) {
     _sitePrisma = new SitePrismaClient({
+      datasources: {
+        db: { url: envConfig.database.url },
+      },
       log:
         envConfig.nodeEnv === "development"
           ? ["query", "error", "warn"]

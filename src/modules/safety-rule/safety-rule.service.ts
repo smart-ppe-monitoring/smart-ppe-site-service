@@ -498,7 +498,12 @@ export class SafetyRuleService {
     } else if (siteId) {
       this.cache.invalidateSite(siteId);
     } else {
-      this.cache.clear();
+      // SEC-15: Prevent unconstrained company-wide cache purge triggering DB stampede
+      throw new AppError(
+        "Phải cung cấp ít nhất siteId hoặc cameraId để xóa cache",
+        400,
+        ERROR_CODE.VALIDATION_ERROR,
+      );
     }
   }
 }
