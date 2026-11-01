@@ -529,6 +529,90 @@ describe("Security Patches Regression Suite (SEC-01, SEC-02, SEC-03)", () => {
     });
   });
 
+  // ── SEC-04: Camera Safety Config Phantom State Loss ───────────────────────
+  describe("SEC-04: CAMERA-SAFETY-CONFIG-PHANTOM-STATE-LOSS", () => {
+    const originalFetch = global.fetch;
+
+    it("should serialize all safety override parameters into outbound HTTP body to Camera Service", async () => {
+      let capturedBody: any = null;
+      let capturedMethod: any = null;
+
+      global.fetch = async (_url: any, init: any) => {
+        capturedMethod = init?.method;
+        capturedBody = JSON.parse(init?.body || "{}");
+        return new globalThis.Response(
+          JSON.stringify({
+            data: {
+              id: "cfg-cam-101",
+              cameraId: "cam-101",
+              confidenceThreshold: capturedBody.confidenceThreshold,
+              confirmationDuration: capturedBody.confirmationDuration,
+              cooldownDuration: capturedBody.cooldownDuration,
+              enableNoHelmet: capturedBody.enableNoHelmet,
+              enableNoVest: capturedBody.enableNoVest,
+              enableRestrictedArea: capturedBody.enableRestrictedArea,
+              modelVersionId: capturedBody.modelVersionId,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      };
+
+      try {
+        const client = new CameraServiceClient("http://camera-service:8892");
+        const overrideDto = {
+          confidenceThreshold: 0.85,
+          confirmationDuration: 10,
+          cooldownDuration: 60,
+          enableNoHelmet: true,
+          enableNoVest: false,
+          enableRestrictedArea: true,
+          modelVersionId: "model-v7-latest",
+        };
+
+        const result = await client.upsertCameraSafetyConfig("cam-101", overrideDto, "token-xyz");
+
+        assert.equal(capturedMethod, "PUT");
+        assert.ok(capturedBody);
+        assert.equal(capturedBody.processingEnabled, true);
+        assert.equal(capturedBody.confidenceThreshold, 0.85);
+        assert.equal(capturedBody.confirmationDuration, 10);
+        assert.equal(capturedBody.cooldownDuration, 60);
+        assert.equal(capturedBody.enableNoHelmet, true);
+        assert.equal(capturedBody.enableNoVest, false);
+        assert.equal(capturedBody.enableRestrictedArea, true);
+        assert.equal(capturedBody.modelVersionId, "model-v7-latest");
+
+        assert.ok(result);
+        assert.equal(result.id, "cfg-cam-101");
+        assert.equal(result.cameraId, "cam-101");
+        assert.equal(result.confidenceThreshold, 0.85);
+        assert.equal(result.enableNoVest, false);
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
+    it("should return null when Camera Service request fails", async () => {
+      global.fetch = async () => {
+        return new globalThis.Response(JSON.stringify({ error: "Failed" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+
+      try {
+        const client = new CameraServiceClient("http://camera-service:8892");
+        const result = await client.upsertCameraSafetyConfig("cam-err", {
+          confidenceThreshold: 0.9,
+        });
+        assert.equal(result, null);
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+  });
+
   // ── SEC-05: Cross-Site Camera Effective Rule Resolution ───────────────────
   describe("SEC-05: CROSS-SITE-CAMERA-EFFECTIVE-RULE-CORRUPTION", () => {
     it("should reject effective config request when camera does not belong to specified siteId", async () => {

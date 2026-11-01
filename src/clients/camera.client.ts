@@ -125,10 +125,18 @@ export class CameraServiceClient {
     data: UpdateCameraSafetyConfigDto,
     token?: string,
   ): Promise<RemoteCameraConfig | null> {
+    // SEC-04: Transmit all caller DTO fields in outbound body to Camera Service instead of omitting them
     const res = await this.request<any>(`/api/v1/cameras/${cameraId}/config`, {
       method: "PUT",
       body: JSON.stringify({
         processingEnabled: true,
+        confidenceThreshold: data.confidenceThreshold,
+        confirmationDuration: data.confirmationDuration,
+        cooldownDuration: data.cooldownDuration,
+        enableNoHelmet: data.enableNoHelmet,
+        enableNoVest: data.enableNoVest,
+        enableRestrictedArea: data.enableRestrictedArea,
+        modelVersionId: data.modelVersionId,
       }),
       token,
     });
@@ -136,14 +144,49 @@ export class CameraServiceClient {
 
     return {
       id: res.id || `cfg-${cameraId}`,
-      cameraId,
-      confidenceThreshold: data.confidenceThreshold !== undefined ? data.confidenceThreshold : null,
-      confirmationDuration: data.confirmationDuration !== undefined ? data.confirmationDuration : null,
-      cooldownDuration: data.cooldownDuration !== undefined ? data.cooldownDuration : null,
-      enableNoHelmet: data.enableNoHelmet !== undefined ? data.enableNoHelmet : null,
-      enableNoVest: data.enableNoVest !== undefined ? data.enableNoVest : null,
-      enableRestrictedArea: data.enableRestrictedArea !== undefined ? data.enableRestrictedArea : null,
-      modelVersionId: data.modelVersionId !== undefined ? data.modelVersionId : null,
+      cameraId: res.cameraId || cameraId,
+      confidenceThreshold:
+        res.confidenceThreshold !== undefined
+          ? res.confidenceThreshold
+          : data.confidenceThreshold !== undefined
+            ? data.confidenceThreshold
+            : null,
+      confirmationDuration:
+        res.confirmationDuration !== undefined
+          ? res.confirmationDuration
+          : data.confirmationDuration !== undefined
+            ? data.confirmationDuration
+            : null,
+      cooldownDuration:
+        res.cooldownDuration !== undefined
+          ? res.cooldownDuration
+          : data.cooldownDuration !== undefined
+            ? data.cooldownDuration
+            : null,
+      enableNoHelmet:
+        res.enableNoHelmet !== undefined
+          ? res.enableNoHelmet
+          : data.enableNoHelmet !== undefined
+            ? data.enableNoHelmet
+            : null,
+      enableNoVest:
+        res.enableNoVest !== undefined
+          ? res.enableNoVest
+          : data.enableNoVest !== undefined
+            ? data.enableNoVest
+            : null,
+      enableRestrictedArea:
+        res.enableRestrictedArea !== undefined
+          ? res.enableRestrictedArea
+          : data.enableRestrictedArea !== undefined
+            ? data.enableRestrictedArea
+            : null,
+      modelVersionId:
+        res.modelVersionId !== undefined
+          ? res.modelVersionId
+          : data.modelVersionId !== undefined
+            ? data.modelVersionId
+            : null,
       createdAt: res.createdAt || new Date().toISOString(),
       updatedAt: res.updatedAt || new Date().toISOString(),
     };
