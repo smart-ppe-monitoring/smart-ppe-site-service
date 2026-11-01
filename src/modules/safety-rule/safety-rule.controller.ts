@@ -8,6 +8,7 @@ import {
   UpdateCameraSafetyConfigDto,
   EffectiveSafetyConfigQueryDto,
 } from "./safety-rule.dto";
+import { extractTokenFromRequest } from "../../middlewares/auth.middleware";
 
 export class SafetyRuleController {
   private readonly service: SafetyRuleService;
@@ -80,8 +81,10 @@ export class SafetyRuleController {
     next: NextFunction,
   ) => {
     try {
+      const token = extractTokenFromRequest(req as any);
       const data = await this.service.getCameraSafetyConfig(
         req.params.cameraId,
+        token,
       );
       res.json({
         success: true,
@@ -99,6 +102,7 @@ export class SafetyRuleController {
   ) => {
     try {
       const actorId = (req as any).user?.id;
+      const token = extractTokenFromRequest(req as any);
       const data = await this.service.updateCameraSafetyConfig(
         req.params.cameraId,
         req.body,
@@ -107,6 +111,7 @@ export class SafetyRuleController {
           ipAddress: req.ip,
           userAgent: req.headers["user-agent"],
         },
+        token,
       );
       res.json({
         success: true,
@@ -125,10 +130,11 @@ export class SafetyRuleController {
   ) => {
     try {
       const actorId = (req as any).user?.id;
+      const token = extractTokenFromRequest(req as any);
       await this.service.deleteCameraSafetyConfig(req.params.cameraId, actorId, {
         ipAddress: req.ip,
         userAgent: req.headers["user-agent"],
-      });
+      }, token);
       res.json({
         success: true,
         message:
@@ -145,7 +151,8 @@ export class SafetyRuleController {
     next: NextFunction,
   ) => {
     try {
-      const data = await this.service.getEffectiveConfig(req.query);
+      const token = extractTokenFromRequest(req as any);
+      const data = await this.service.getEffectiveConfig(req.query, token);
       res.json({
         success: true,
         data,

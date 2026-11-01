@@ -18,7 +18,10 @@ export class ReportingServiceClient {
     this.timeoutMs = timeoutMs;
   }
 
-  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T | null> {
+  private async request<T>(
+    endpoint: string,
+    options: RequestInit & { token?: string } = {},
+  ): Promise<T | null> {
     const url = `${this.baseUrl}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -27,6 +30,12 @@ export class ReportingServiceClient {
       "Content-Type": "application/json",
       ...((options.headers as Record<string, string>) || {}),
     };
+
+    if (options.token) {
+      headers["Authorization"] = options.token.startsWith("Bearer ")
+        ? options.token
+        : `Bearer ${options.token}`;
+    }
 
     if (envConfig.gateway.internalSecret) {
       headers["x-gateway-secret"] = envConfig.gateway.internalSecret;
@@ -65,12 +74,15 @@ export class ReportingServiceClient {
    */
   async findActiveModelVersion(
     modelVersionId?: string | null,
+    token?: string,
   ): Promise<ResolvedAiModelVersionDto | null> {
     const endpoint = modelVersionId
       ? `/api/v1/ai-models/versions/${modelVersionId}`
       : `/api/v1/ai-models/active-version`;
 
-    const result = await this.request<ResolvedAiModelVersionDto>(endpoint);
+    const result = await this.request<ResolvedAiModelVersionDto>(endpoint, {
+      token,
+    });
     if (result) return result;
 
     // Nếu tìm kiếm theo modelVersionId cụ thể mà không thấy -> trả về null để báo lỗi không tồn tại

@@ -254,7 +254,8 @@ export class SiteController {
   deleteZone = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
-      const result = await this.service.deleteZone(id, req.user);
+      const force = req.query.force === "true";
+      const result = await this.service.deleteZone(id, force, req.user);
       res.json({
         success: true,
         data: result,

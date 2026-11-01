@@ -41,7 +41,10 @@ export class CameraServiceClient {
     this.timeoutMs = timeoutMs;
   }
 
-  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T | null> {
+  private async request<T>(
+    endpoint: string,
+    options: RequestInit & { token?: string } = {},
+  ): Promise<T | null> {
     const url = `${this.baseUrl}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -50,6 +53,12 @@ export class CameraServiceClient {
       "Content-Type": "application/json",
       ...((options.headers as Record<string, string>) || {}),
     };
+
+    if (options.token) {
+      headers["Authorization"] = options.token.startsWith("Bearer ")
+        ? options.token
+        : `Bearer ${options.token}`;
+    }
 
     if (envConfig.gateway.internalSecret) {
       headers["x-gateway-secret"] = envConfig.gateway.internalSecret;
@@ -86,15 +95,26 @@ export class CameraServiceClient {
   /**
    * Tra cứu thông tin Camera theo ID
    */
-  async findCameraById(cameraId: string): Promise<RemoteCameraItem | null> {
-    return this.request<RemoteCameraItem>(`/api/v1/cameras/${cameraId}`);
+  async findCameraById(
+    cameraId: string,
+    token?: string,
+  ): Promise<RemoteCameraItem | null> {
+    return this.request<RemoteCameraItem>(`/api/v1/cameras/${cameraId}`, {
+      token,
+    });
   }
 
   /**
    * Tra cứu cấu hình an toàn riêng biệt của Camera
    */
-  async findCameraConfig(cameraId: string): Promise<RemoteCameraConfig | null> {
-    return this.request<RemoteCameraConfig>(`/api/v1/cameras/${cameraId}/config`);
+  async findCameraConfig(
+    cameraId: string,
+    token?: string,
+  ): Promise<RemoteCameraConfig | null> {
+    return this.request<RemoteCameraConfig>(
+      `/api/v1/cameras/${cameraId}/config`,
+      { token },
+    );
   }
 
   /**
@@ -103,12 +123,14 @@ export class CameraServiceClient {
   async upsertCameraSafetyConfig(
     cameraId: string,
     data: UpdateCameraSafetyConfigDto,
+    token?: string,
   ): Promise<RemoteCameraConfig | null> {
     const res = await this.request<any>(`/api/v1/cameras/${cameraId}/config`, {
       method: "PUT",
       body: JSON.stringify({
         processingEnabled: true,
       }),
+      token,
     });
     if (!res) return null;
 
@@ -130,10 +152,17 @@ export class CameraServiceClient {
   /**
    * Xóa ghi đè cấu hình Camera (trả về thừa kế từ Site)
    */
-  async clearCameraSafetyConfig(cameraId: string): Promise<boolean> {
-    const result = await this.request<unknown>(`/api/v1/cameras/${cameraId}/config`, {
-      method: "DELETE",
-    });
+  async clearCameraSafetyConfig(
+    cameraId: string,
+    token?: string,
+  ): Promise<boolean> {
+    const result = await this.request<unknown>(
+      `/api/v1/cameras/${cameraId}/config`,
+      {
+        method: "DELETE",
+        token,
+      },
+    );
     return result !== null;
   }
 }

@@ -11,6 +11,9 @@ import { SiteRepository } from "../src/modules/site/site.repository";
 import { SafetyRuleService } from "../src/modules/safety-rule/safety-rule.service";
 import { SafetyRuleCacheService } from "../src/modules/safety-rule/safety-rule-cache.service";
 import { updateSiteSafetyConfigSchema } from "../src/modules/site/site.validation";
+import { envSchema } from "../src/config/env.config";
+import { CameraServiceClient } from "../src/clients/camera.client";
+import { ReportingServiceClient } from "../src/clients/reporting.client";
 import fs from "node:fs";
 import path from "node:path";
 import { AppError } from "../src/common/errors/app-error";
@@ -701,6 +704,188 @@ describe("Security Patches Regression Suite (SEC-01, SEC-02, SEC-03)", () => {
       assert.match(content, /CREATE\s+EXTENSION\s+IF\s+NOT\s+EXISTS\s+"?pgcrypto"?/i);
       assert.match(content, /CREATE\s+OR\s+REPLACE\s+FUNCTION\s+uuid_generate_v7\(\)/i);
       assert.match(content, /RETURNS\s+uuid\s+AS/i);
+    });
+  });
+
+  // ── SEC-08: Satellite Environment Schema Eliminates Private Key Requirement ──
+  describe("SEC-08: PRODUCTION-JWT-PRIVATE-KEY-LEAKAGE-REQUIREMENT", () => {
+    const baseProdEnv = {
+      NODE_ENV: "production",
+      SITE_DATABASE_URL: "postgresql://site_user:pass@localhost:5433/site_db",
+      JWT_ALGORITHM: "RS256",
+      JWT_ACCESS_SECRET: "a".repeat(32),
+      JWT_REFRESH_SECRET: "b".repeat(32),
+      ALLOWED_ORIGINS: "https://app.smart-ppe.com",
+      ENCRYPTION_KEY: "c".repeat(32),
+      GOOGLE_OAUTH_ALLOWED_REDIRECT_URIS: "https://app.smart-ppe.com/callback",
+    };
+
+    it("should validate production env with only JWT_PUBLIC_KEY and empty JWT_PRIVATE_KEY", () => {
+      const prodEnv = {
+        ...baseProdEnv,
+        JWT_PUBLIC_KEY: "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A\n-----END PUBLIC KEY-----",
+        JWT_PRIVATE_KEY: "", // Should NOT be required for satellite microservice
+      };
+
+      const result = envSchema.safeParse(prodEnv);
+      assert.equal(result.success, true);
+    });
+
+    it("should validate production env with AUTH_JWKS_URL and empty JWT_PRIVATE_KEY", () => {
+      const prodEnv = {
+        ...baseProdEnv,
+        AUTH_JWKS_URL: "https://identity.smart-ppe.local/.well-known/jwks.json",
+        JWT_PRIVATE_KEY: "",
+      };
+
+      const result = envSchema.safeParse(prodEnv);
+      assert.equal(result.success, true);
+    });
+
+    it("should reject production env if neither JWT_PUBLIC_KEY nor AUTH_JWKS_URL is configured", () => {
+      const invalidProdEnv = {
+        ...baseProdEnv,
+        JWT_PUBLIC_KEY: "",
+        AUTH_JWKS_URL: "",
+      };
+
+      const result = envSchema.safeParse(invalidProdEnv);
+      assert.equal(result.success, false);
+      if (!result.success) {
+        assert.ok(
+          result.error.errors.some((e) =>
+            e.message.includes("JWT_PUBLIC_KEY hoặc AUTH_JWKS_URL bắt buộc"),
+          ),
+        );
+      }
+    });
+  });
+
+  // ── SEC-09: Inter-Service HTTP Clients M2M Bearer Authentication ──────────
+  describe("SEC-09: UNAUTHENTICATED-M2M-INTER-SERVICE-CALLS", () => {
+    const originalFetch = global.fetch;
+
+    it("should attach Authorization Bearer header in CameraServiceClient when token is provided", async () => {
+      let capturedHeaders: any = null;
+      global.fetch = async (_url: any, init: any) => {
+        capturedHeaders = init?.headers;
+        return new globalThis.Response(
+          JSON.stringify({ data: { id: "cam-100", siteId: "site-1" } }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      };
+
+      try {
+        const client = new CameraServiceClient("http://camera-service:8892");
+        const camera = await client.findCameraById("cam-100", "sample-m2m-jwt-token");
+
+        assert.ok(camera);
+        assert.equal(camera.id, "cam-100");
+        assert.equal(capturedHeaders?.["Authorization"], "Bearer sample-m2m-jwt-token");
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
+    it("should attach Authorization Bearer header in ReportingServiceClient when token is provided", async () => {
+      let capturedHeaders: any = null;
+      global.fetch = async (_url: any, init: any) => {
+        capturedHeaders = init?.headers;
+        return new globalThis.Response(
+          JSON.stringify({
+            data: { id: "v-model-1", modelId: "m1", modelName: "YOLO11" },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      };
+
+      try {
+        const client = new ReportingServiceClient("http://reporting-service:8894");
+        const model = await client.findActiveModelVersion("v-model-1", "sample-reporting-jwt-token");
+
+        assert.ok(model);
+        assert.equal(model.id, "v-model-1");
+        assert.equal(capturedHeaders?.["Authorization"], "Bearer sample-reporting-jwt-token");
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+  });
+
+  // ── SEC-10: Zone Hard Deletion Protection Against Promotion ──────────────
+  describe("SEC-10: ZONE-HARD-DELETE-SETS-NULL-PROMOTING-RESTRICTED-AREAS", () => {
+    it("should reject deleting zone when it contains restricted areas and force=false", async () => {
+      const mockRepo = {
+        findZoneById: async (id: string) => ({
+          id,
+          siteId: "site-uuid",
+          name: "Zone With Hazardous Areas",
+          restrictedAreas: [
+            { id: "ra-1", name: "High Voltage Area" },
+            { id: "ra-2", name: "Deep Excavation Pit" },
+          ],
+        }),
+        deleteZone: async (id: string) => ({ id }),
+      } as any;
+
+      const service = new SiteService(mockRepo);
+
+      await assert.rejects(
+        async () => {
+          await service.deleteZone("zone-with-ra", false);
+        },
+        (err: any) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.statusCode, 400);
+          assert.equal(err.code, ERROR_CODE.VALIDATION_ERROR);
+          assert.match(err.message, /Không thể xóa phân khu đang chứa 2 vùng hạn chế/);
+          return true;
+        },
+      );
+    });
+
+    it("should allow deleting zone with restricted areas when force=true", async () => {
+      let deletedZoneId: string | null = null;
+      const mockRepo = {
+        findZoneById: async (id: string) => ({
+          id,
+          siteId: "site-uuid",
+          name: "Zone With Hazardous Areas",
+          restrictedAreas: [{ id: "ra-1", name: "Hazard 1" }],
+        }),
+        deleteZone: async (id: string) => {
+          deletedZoneId = id;
+          return { id };
+        },
+      } as any;
+
+      const service = new SiteService(mockRepo);
+      const res = await service.deleteZone("zone-with-ra", true);
+
+      assert.equal(deletedZoneId, "zone-with-ra");
+      assert.equal(res.id, "zone-with-ra");
+    });
+
+    it("should allow deleting zone when it contains no restricted areas", async () => {
+      let deletedZoneId: string | null = null;
+      const mockRepo = {
+        findZoneById: async (id: string) => ({
+          id,
+          siteId: "site-uuid",
+          name: "Clean Zone",
+          restrictedAreas: [],
+        }),
+        deleteZone: async (id: string) => {
+          deletedZoneId = id;
+          return { id };
+        },
+      } as any;
+
+      const service = new SiteService(mockRepo);
+      const res = await service.deleteZone("clean-zone", false);
+
+      assert.equal(deletedZoneId, "clean-zone");
+      assert.equal(res.id, "clean-zone");
     });
   });
 });

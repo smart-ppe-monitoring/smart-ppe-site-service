@@ -310,8 +310,22 @@ export class SiteService {
     return this.repository.updateZone(id, data);
   }
 
-  async deleteZone(id: string, user?: UserContext) {
-    await this.findZoneById(id, user);
+  async deleteZone(id: string, force = false, user?: UserContext) {
+    const zone = await this.findZoneById(id, user);
+
+    const count =
+      Array.isArray(zone.restrictedAreas)
+        ? zone.restrictedAreas.length
+        : (zone._count?.restrictedAreas || 0);
+
+    if (count > 0 && !force) {
+      throw new AppError(
+        `Không thể xóa phân khu đang chứa ${count} vùng hạn chế. Vui lòng chuyển hoặc xóa các vùng hạn chế trước để tránh thăng hạng ngoài ý muốn lên toàn công trường.`,
+        400,
+        ERROR_CODE.VALIDATION_ERROR,
+      );
+    }
+
     return this.repository.deleteZone(id);
   }
 
