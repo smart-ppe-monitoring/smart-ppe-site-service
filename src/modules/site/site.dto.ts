@@ -19,6 +19,17 @@ export interface PaginatedResultDto<T> {
 
 
 // ── Site DTOs ────────────────────────────────────────────────────────────────
+export interface SiteContactOfficerDto {
+  userId?: string | null;
+  name: string;
+  role?: string | null;
+  roleTitle?: string | null;
+  phone?: string | null;
+  phones?: string[];
+  email?: string | null;
+  isPrimary?: boolean;
+}
+
 export interface CreateSiteDto {
   name: string;
   code: string;
@@ -27,6 +38,9 @@ export interface CreateSiteDto {
   status?: SiteStatus;
   startDate?: string | Date;
   endDate?: string | Date;
+  contactPerson?: string | null;
+  contactPhone?: string | null;
+  contactOfficers?: SiteContactOfficerDto[] | null;
 }
 
 export interface UpdateSiteDto {
@@ -37,6 +51,9 @@ export interface UpdateSiteDto {
   status?: SiteStatus;
   startDate?: string | Date | null;
   endDate?: string | Date | null;
+  contactPerson?: string | null;
+  contactPhone?: string | null;
+  contactOfficers?: SiteContactOfficerDto[] | null;
 }
 
 export interface SiteQueryDto {
@@ -82,6 +99,7 @@ export interface UpdateSiteSafetyConfigDto {
   enableNoHelmet?: boolean;
   enableNoVest?: boolean;
   enableRestrictedArea?: boolean;
+  modelVersionId?: string | null;
   updatedBy?: string;
 }
 

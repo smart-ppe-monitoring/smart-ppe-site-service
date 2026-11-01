@@ -20,6 +20,9 @@ export interface RemoteCameraConfig {
   enableNoVest?: boolean | null;
   enableRestrictedArea?: boolean | null;
   modelVersionId?: string | null;
+  captureFps?: number;
+  roiPolygon?: any;
+  motionSensitivity?: number;
   createdAt?: string | Date;
   updatedAt?: string | Date;
 }
