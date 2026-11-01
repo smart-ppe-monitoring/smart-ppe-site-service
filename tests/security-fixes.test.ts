@@ -21,6 +21,7 @@ import { ERROR_CODE } from "../src/common/errors/error-code";
 import { PERMISSIONS } from "../src/common/constants/permission.constant";
 import { ROLES } from "../src/common/constants/role.constant";
 import { JWT_PURPOSE, JWT_ALGORITHM } from "../src/common/constants/jwt.constant";
+import { SITE_STATUS } from "../src/common/constants/site.constant";
 
 describe("Security Patches Regression Suite (SEC-01, SEC-02, SEC-03)", () => {
   let privateKey: string;
@@ -886,6 +887,315 @@ describe("Security Patches Regression Suite (SEC-01, SEC-02, SEC-03)", () => {
 
       assert.equal(deletedZoneId, "clean-zone");
       assert.equal(res.id, "clean-zone");
+    });
+  });
+
+  // ── SEC-11: Unenforced mustChangePassword Flag in Satellite Auth ───────────
+  describe("SEC-11: AUTH-UNENFORCED-MUST-CHANGE-PASSWORD", () => {
+    it("should reject token with mustChangePassword=true with HTTP 403 FORBIDDEN", async () => {
+      const token = jwt.sign(
+        {
+          sub: "user-pwd-reset",
+          email: "mustchange@site.com",
+          role: ROLES.OPERATOR,
+          mustChangePassword: true,
+          purpose: JWT_PURPOSE.ACCESS,
+        },
+        privateKey,
+        { algorithm: "RS256", expiresIn: "1h" },
+      );
+
+      const req = {
+        headers: { authorization: `Bearer ${token}` },
+        query: {},
+        cookies: {},
+        baseUrl: "/api/v1/sites",
+        path: "/",
+      } as unknown as Request;
+
+      let caughtError: any = null;
+      await authMiddleware(req, {} as Response, (err) => {
+        caughtError = err;
+      });
+
+      assert.ok(caughtError instanceof AppError);
+      assert.equal(caughtError.statusCode, 403);
+      assert.equal(caughtError.code, ERROR_CODE.FORBIDDEN);
+      assert.match(caughtError.message, /đổi mật khẩu/);
+    });
+
+    it("should allow token when mustChangePassword is false or omitted", async () => {
+      const token = jwt.sign(
+        {
+          sub: "user-normal",
+          email: "normal@site.com",
+          role: ROLES.OPERATOR,
+          mustChangePassword: false,
+          purpose: JWT_PURPOSE.ACCESS,
+        },
+        privateKey,
+        { algorithm: "RS256", expiresIn: "1h" },
+      );
+
+      const req = {
+        headers: { authorization: `Bearer ${token}` },
+        query: {},
+        cookies: {},
+        baseUrl: "/api/v1/sites",
+        path: "/",
+      } as unknown as Request;
+
+      let nextCalled = false;
+      let caughtError: any = null;
+      await authMiddleware(req, {} as Response, (err) => {
+        nextCalled = true;
+        caughtError = err;
+      });
+
+      assert.equal(nextCalled, true);
+      assert.equal(caughtError, undefined);
+      assert.equal((req as any).user.email, "normal@site.com");
+    });
+  });
+
+  // ── SEC-12: Container Build Missing Public Key and Lockfile ────────────────
+  describe("SEC-12: CONTAINER-BUILD-MISSING-PUBLIC-KEY-AND-LOCKFILE", () => {
+    it("should include pnpm-lock.yaml and --frozen-lockfile in Dockerfile deps stage", () => {
+      const dockerfilePath = path.resolve(__dirname, "../Dockerfile");
+      const content = fs.readFileSync(dockerfilePath, "utf-8");
+
+      assert.match(content, /COPY package\.json pnpm-lock\.yaml\*/);
+      assert.match(content, /pnpm install --frozen-lockfile/);
+    });
+
+    it("should copy keys directory to runner stage in Dockerfile", () => {
+      const dockerfilePath = path.resolve(__dirname, "../Dockerfile");
+      const content = fs.readFileSync(dockerfilePath, "utf-8");
+
+      assert.match(content, /COPY --from=builder \/app\/keys \.\/keys/);
+    });
+  });
+
+  // ── SEC-13: Cross-Site Restricted Area Hierarchy Contamination ─────────────
+  describe("SEC-13: CROSS-SITE-RESTRICTED-AREA-HIERARCHY-CONTAMINATION", () => {
+    it("should reject createRestrictedArea with 400 VALIDATION_ERROR when zoneId does not exist", async () => {
+      const mockRepo = {
+        findSiteById: async (id: string) => ({ id, name: "Site A", status: SITE_STATUS.ACTIVE }),
+        findZoneById: async (_id: string) => null,
+      } as unknown as SiteRepository;
+
+      const service = new SiteService(mockRepo);
+
+      await assert.rejects(
+        async () => {
+          await service.createRestrictedArea({
+            siteId: "site-uuid",
+            zoneId: "non-existent-zone-uuid",
+            name: "Danger Pit",
+            boundary: [
+              { x: 0, y: 0 },
+              { x: 10, y: 0 },
+              { x: 10, y: 10 },
+            ],
+          });
+        },
+        (err: any) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.statusCode, 400);
+          assert.equal(err.code, ERROR_CODE.VALIDATION_ERROR);
+          assert.match(err.message, /không tồn tại hoặc không thuộc công trường này/);
+          return true;
+        },
+      );
+    });
+
+    it("should reject createRestrictedArea with 400 VALIDATION_ERROR when zoneId belongs to foreign site", async () => {
+      const mockRepo = {
+        findSiteById: async (id: string) => ({ id, name: "Site A", status: SITE_STATUS.ACTIVE }),
+        findZoneById: async (id: string) => ({
+          id,
+          siteId: "different-site-uuid",
+          name: "Zone In Different Site",
+        }),
+      } as unknown as SiteRepository;
+
+      const service = new SiteService(mockRepo);
+
+      await assert.rejects(
+        async () => {
+          await service.createRestrictedArea({
+            siteId: "my-site-uuid",
+            zoneId: "zone-in-other-site",
+            name: "Danger Zone",
+            boundary: [
+              { x: 0, y: 0 },
+              { x: 10, y: 0 },
+              { x: 10, y: 10 },
+            ],
+          });
+        },
+        (err: any) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.statusCode, 400);
+          assert.equal(err.code, ERROR_CODE.VALIDATION_ERROR);
+          assert.match(err.message, /không tồn tại hoặc không thuộc công trường này/);
+          return true;
+        },
+      );
+    });
+
+    it("should reject updateRestrictedArea with 400 VALIDATION_ERROR when target zone is foreign or non-existent", async () => {
+      const mockRepo = {
+        findRestrictedAreaById: async (id: string) => ({
+          id,
+          siteId: "site-uuid",
+          name: "Existing Area",
+        }),
+        findZoneById: async (_id: string) => null,
+      } as unknown as SiteRepository;
+
+      const service = new SiteService(mockRepo);
+
+      await assert.rejects(
+        async () => {
+          await service.updateRestrictedArea("ra-uuid", {
+            zoneId: "non-existent-zone-uuid",
+          });
+        },
+        (err: any) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.statusCode, 400);
+          assert.equal(err.code, ERROR_CODE.VALIDATION_ERROR);
+          assert.match(err.message, /không tồn tại hoặc không thuộc công trường của vùng hạn chế này/);
+          return true;
+        },
+      );
+    });
+  });
+
+  // ── SEC-14: Decommissioned Site Mutation State Bypass ──────────────────────
+  describe("SEC-14: DECOMMISSIONED-SITE-MUTATION-STATE-BYPASS", () => {
+    it("should reject createZone on ARCHIVED, COMPLETED, or INACTIVE site with 400 INVALID_STATE", async () => {
+      const decommissionedStatuses = [
+        SITE_STATUS.ARCHIVED,
+        SITE_STATUS.COMPLETED,
+        SITE_STATUS.INACTIVE,
+      ];
+
+      for (const status of decommissionedStatuses) {
+        const mockRepo = {
+          findSiteById: async (id: string) => ({
+            id,
+            name: "Closed Site",
+            status,
+          }),
+        } as unknown as SiteRepository;
+
+        const service = new SiteService(mockRepo);
+
+        await assert.rejects(
+          async () => {
+            await service.createZone({
+              siteId: "site-closed",
+              name: "New Zone In Decommissioned Site",
+              code: "ZONE-DEC",
+            });
+          },
+          (err: any) => {
+            assert.ok(err instanceof AppError);
+            assert.equal(err.statusCode, 400);
+            assert.equal(err.code, ERROR_CODE.INVALID_STATE);
+            assert.match(err.message, /Không thể thao tác trên công trường đã/);
+            return true;
+          },
+        );
+      }
+    });
+
+    it("should reject createRestrictedArea on an ARCHIVED site with 400 INVALID_STATE", async () => {
+      const mockRepo = {
+        findSiteById: async (id: string) => ({
+          id,
+          name: "Archived Site",
+          status: SITE_STATUS.ARCHIVED,
+        }),
+      } as unknown as SiteRepository;
+
+      const service = new SiteService(mockRepo);
+
+      await assert.rejects(
+        async () => {
+          await service.createRestrictedArea({
+            siteId: "site-archived",
+            name: "Ghost Hazard Area",
+            boundary: [
+              { x: 0, y: 0 },
+              { x: 10, y: 0 },
+              { x: 10, y: 10 },
+            ],
+          });
+        },
+        (err: any) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.statusCode, 400);
+          assert.equal(err.code, ERROR_CODE.INVALID_STATE);
+          assert.match(err.message, /Không thể thao tác trên công trường đã/);
+          return true;
+        },
+      );
+    });
+
+    it("should reject updateSafetyConfig on a COMPLETED site with 400 INVALID_STATE", async () => {
+      const mockRepo = {
+        findSiteById: async (id: string) => ({
+          id,
+          name: "Completed Site",
+          status: SITE_STATUS.COMPLETED,
+        }),
+      } as unknown as SiteRepository;
+
+      const service = new SiteService(mockRepo);
+
+      await assert.rejects(
+        async () => {
+          await service.updateSafetyConfig("site-completed", {
+            confidenceThreshold: 0.95,
+          });
+        },
+        (err: any) => {
+          assert.ok(err instanceof AppError);
+          assert.equal(err.statusCode, 400);
+          assert.equal(err.code, ERROR_CODE.INVALID_STATE);
+          assert.match(err.message, /Không thể thao tác trên công trường đã/);
+          return true;
+        },
+      );
+    });
+
+    it("should allow createZone on an ACTIVE site", async () => {
+      let createdData: any = null;
+      const mockRepo = {
+        findSiteById: async (id: string) => ({
+          id,
+          name: "Active Site",
+          status: SITE_STATUS.ACTIVE,
+        }),
+        findZoneByCode: async () => null,
+        createZone: async (data: any) => {
+          createdData = data;
+          return { id: "zone-new-uuid", ...data };
+        },
+      } as unknown as SiteRepository;
+
+      const service = new SiteService(mockRepo);
+      const res = await service.createZone({
+        siteId: "site-active",
+        name: "Active Zone",
+        code: "AZ-01",
+      });
+
+      assert.equal(res.id, "zone-new-uuid");
+      assert.equal(createdData.code, "AZ-01");
     });
   });
 });

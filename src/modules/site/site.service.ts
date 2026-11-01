@@ -13,7 +13,7 @@ import {
   UpdateRestrictedAreaDto,
   RestrictedAreaQueryDto,
 } from "./site.dto";
-import { DEFAULT_SAFETY_CONFIG } from "../../common/constants/site.constant";
+import { DEFAULT_SAFETY_CONFIG, SITE_STATUS } from "../../common/constants/site.constant";
 import { ROLES } from "../../common/constants/role.constant";
 import { formatPaginationMeta } from "../../common/helpers/pagination.helper";
 import {
@@ -95,6 +95,23 @@ export class SiteService {
         "Bạn không có quyền truy cập hoặc thực hiện thao tác trên công trường này",
         403,
         ERROR_CODE.FORBIDDEN,
+      );
+    }
+  }
+
+  /**
+   * SEC-14: Asserts that the site is active and not archived, completed, or inactive.
+   */
+  private assertSiteActive(site: { status?: string }): void {
+    if (
+      site.status === SITE_STATUS.ARCHIVED ||
+      site.status === SITE_STATUS.COMPLETED ||
+      site.status === SITE_STATUS.INACTIVE
+    ) {
+      throw new AppError(
+        `Không thể thao tác trên công trường đã ${site.status.toLowerCase()}`,
+        400,
+        ERROR_CODE.INVALID_STATE,
       );
     }
   }
@@ -234,7 +251,8 @@ export class SiteService {
   // ── Zone Operations ────────────────────────────────────────────────────────
   async createZone(data: CreateZoneDto, user?: UserContext) {
     this.assertSiteAccess(data.siteId, user);
-    await this.findSiteById(data.siteId, user);
+    const site = await this.findSiteById(data.siteId, user);
+    this.assertSiteActive(site);
 
     const existing = await this.repository.findZoneByCode(
       data.siteId,
@@ -357,7 +375,8 @@ export class SiteService {
     user?: UserContext,
   ) {
     this.assertSiteAccess(siteId, user);
-    await this.findSiteById(siteId, user);
+    const site = await this.findSiteById(siteId, user);
+    this.assertSiteActive(site);
     const result = await this.repository.upsertSafetyConfig(siteId, data, updatedBy);
     this.cache.invalidateSite(siteId);
     return result;
@@ -366,13 +385,15 @@ export class SiteService {
   // ── Restricted Area Operations ─────────────────────────────────────────────
   async createRestrictedArea(data: CreateRestrictedAreaDto, user?: UserContext) {
     this.assertSiteAccess(data.siteId, user);
-    await this.findSiteById(data.siteId, user);
+    const site = await this.findSiteById(data.siteId, user);
+    this.assertSiteActive(site);
 
+    // SEC-13: Validate zone belongs to target site using repository query to avoid 404 confusion
     if (data.zoneId) {
-      const zone = await this.findZoneById(data.zoneId, user);
-      if (zone.siteId !== data.siteId) {
+      const zone = await this.repository.findZoneById(data.zoneId);
+      if (!zone || zone.siteId !== data.siteId) {
         throw new AppError(
-          "Phân khu được chỉ định không thuộc công trường này",
+          "Phân khu được chỉ định không tồn tại hoặc không thuộc công trường này",
           400,
           ERROR_CODE.VALIDATION_ERROR,
         );
@@ -442,10 +463,10 @@ export class SiteService {
     const area = await this.findRestrictedAreaById(id, user);
 
     if (data.zoneId) {
-      const zone = await this.findZoneById(data.zoneId, user);
-      if (zone.siteId !== area.siteId) {
+      const zone = await this.repository.findZoneById(data.zoneId);
+      if (!zone || zone.siteId !== area.siteId) {
         throw new AppError(
-          "Phân khu được chỉ định không thuộc công trường của vùng hạn chế này",
+          "Phân khu được chỉ định không tồn tại hoặc không thuộc công trường của vùng hạn chế này",
           400,
           ERROR_CODE.VALIDATION_ERROR,
         );

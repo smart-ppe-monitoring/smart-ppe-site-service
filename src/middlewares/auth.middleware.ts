@@ -111,6 +111,18 @@ export async function authMiddleware(
       return;
     }
 
+    // SEC-11: Enforce mustChangePassword flag - reject temporary credentials on business endpoints
+    if (payload.mustChangePassword === true) {
+      next(
+        new AppError(
+          "Yêu cầu đổi mật khẩu trước khi tiếp tục",
+          403,
+          ERROR_CODE.FORBIDDEN,
+        ),
+      );
+      return;
+    }
+
     // SEC-03: Extract tenancy scoping claims (siteId, siteIds) for BOLA protection
     req.user = {
       id: payload.id || payload.sub,
