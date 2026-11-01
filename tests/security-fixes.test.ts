@@ -37,9 +37,26 @@ import {
 } from "../src/modules/safety-rule/safety-rule-cache.service";
 import { isUuid, generateId, UUID_REGEX } from "../src/common/helpers/uuid.helper";
 import { maintenanceGuard } from "../src/middlewares/maintenance.middleware";
-import { updateSiteSafetyConfigSchema } from "../src/modules/site/site.validation";
+import {
+  updateSiteSafetyConfigSchema,
+  siteQuerySchema,
+  zoneQuerySchema,
+  restrictedAreaQuerySchema,
+  polygonPointSchema,
+  createRestrictedAreaSchema,
+} from "../src/modules/site/site.validation";
 import { invalidateCacheSchema } from "../src/modules/safety-rule/safety-rule.validation";
-import { envSchema, envConfig } from "../src/config/env.config";
+import { envSchema, envConfig, parseTrustProxy } from "../src/config/env.config";
+import {
+  calculatePaginationSkip,
+  MAX_PAGE,
+  MAX_PAGINATION_SKIP,
+} from "../src/common/helpers/pagination.helper";
+import {
+  checkDatabaseHealth,
+  resetDatabaseHealthCache,
+  DB_HEALTH_CACHE_TTL_MS,
+} from "../src/site.app";
 import { CameraServiceClient } from "../src/clients/camera.client";
 import { ReportingServiceClient } from "../src/clients/reporting.client";
 import fs from "node:fs";
@@ -2715,6 +2732,182 @@ describe("Security Patches Regression Suite (SEC-01, SEC-02, SEC-03)", () => {
       cache.invalidateCamera("cam-fast");
       assert.equal((cache as any).cameraIndex.has("cam-fast"), false);
       assert.equal(cache.getForCamera("cam-fast"), null);
+    });
+  });
+
+  // ── SEC-36: Express trust proxy configuration ──────────────────────────────
+  describe("SEC-36: TRUST-PROXY-IP-SPOOFING-RATE-LIMIT-BYPASS", () => {
+    it("should parse 'true' as 1 hop to trust only immediate reverse proxy", () => {
+      assert.equal(parseTrustProxy("true"), 1);
+    });
+
+    it("should parse 'false' and undefined as false", () => {
+      assert.equal(parseTrustProxy("false"), false);
+      assert.equal(parseTrustProxy(undefined), false);
+      assert.equal(parseTrustProxy(""), false);
+    });
+
+    it("should parse custom hop number correctly", () => {
+      assert.equal(parseTrustProxy("2"), 2);
+      assert.equal(parseTrustProxy("0"), 0);
+    });
+
+    it("should preserve custom subnet or host expressions", () => {
+      assert.equal(parseTrustProxy("loopback"), "loopback");
+      assert.equal(parseTrustProxy("127.0.0.1"), "127.0.0.1");
+    });
+  });
+
+  // ── SEC-37: Database connection starvation via health check ───────────────
+  describe("SEC-37: UNBOUNDED-HEALTH-CHECK-DB-STARVATION", () => {
+    before(() => {
+      resetDatabaseHealthCache();
+    });
+
+    it("should cache successful database health checks within DB_HEALTH_CACHE_TTL_MS", async () => {
+      resetDatabaseHealthCache();
+      let queryCallCount = 0;
+      const mockQuery = async () => {
+        queryCallCount++;
+        return 1;
+      };
+
+      const res1 = await checkDatabaseHealth(false, mockQuery);
+      assert.equal(res1, true);
+      assert.equal(queryCallCount, 1);
+
+      // Subsequent calls within TTL should use cached result without re-executing query
+      const res2 = await checkDatabaseHealth(false, mockQuery);
+      const res3 = await checkDatabaseHealth(false, mockQuery);
+      assert.equal(res2, true);
+      assert.equal(res3, true);
+      assert.equal(queryCallCount, 1);
+    });
+
+    it("should query database again after resetDatabaseHealthCache", async () => {
+      resetDatabaseHealthCache();
+      let queryCallCount = 0;
+      const mockQuery = async () => {
+        queryCallCount++;
+        return 1;
+      };
+
+      await checkDatabaseHealth(false, mockQuery);
+      assert.equal(queryCallCount, 1);
+
+      resetDatabaseHealthCache();
+      await checkDatabaseHealth(false, mockQuery);
+      assert.equal(queryCallCount, 2);
+    });
+
+    it("should handle database error gracefully and return false", async () => {
+      resetDatabaseHealthCache();
+      const failingQuery = async () => {
+        throw new Error("DB Connection timed out");
+      };
+
+      const result = await checkDatabaseHealth(true, failingQuery);
+      assert.equal(result, false);
+    });
+  });
+
+  // ── SEC-38: Unbounded pagination offset resource exhaustion ────────────────
+  describe("SEC-38: UNBOUNDED-PAGINATION-OFFSET-RESOURCE-EXHAUSTION-DOS", () => {
+    it("should cap page calculation to MAX_PAGE and MAX_PAGINATION_SKIP in helper", () => {
+      assert.equal(calculatePaginationSkip(1, 20).skip, 0);
+      assert.equal(calculatePaginationSkip(2, 20).skip, 20);
+      assert.equal(calculatePaginationSkip(MAX_PAGE, 20).skip, (MAX_PAGE - 1) * 20);
+
+      // Huge page exceeding MAX_PAGE should be clamped to MAX_PAGE
+      const skipHuge = calculatePaginationSkip(99999999, 20);
+      assert.equal(skipHuge.skip, (MAX_PAGE - 1) * 20);
+      assert.equal(skipHuge.page, MAX_PAGE);
+
+      // Limit is capped to MAX_PAGINATION_LIMIT (100)
+      const skipCapped = calculatePaginationSkip(MAX_PAGE, 500);
+      assert.equal(skipCapped.limit, 100);
+      assert.equal(skipCapped.skip, (MAX_PAGE - 1) * 100);
+    });
+
+    it("should validate and reject page > 10000 in siteQuerySchema", () => {
+      const valid = siteQuerySchema.safeParse({ page: "10000", limit: "20" });
+      assert.equal(valid.success, true);
+
+      const invalid = siteQuerySchema.safeParse({ page: "10001", limit: "20" });
+      assert.equal(invalid.success, false);
+      if (!invalid.success) {
+        assert.ok(
+          invalid.error.errors.some((e) =>
+            e.message.includes("Số trang không được vượt quá 10,000"),
+          ),
+        );
+      }
+    });
+
+    it("should validate and reject page > 10000 in zoneQuerySchema", () => {
+      const valid = zoneQuerySchema.safeParse({ page: "10000", limit: "20" });
+      assert.equal(valid.success, true);
+
+      const invalid = zoneQuerySchema.safeParse({ page: "50000", limit: "20" });
+      assert.equal(invalid.success, false);
+    });
+
+    it("should validate and reject page > 10000 in restrictedAreaQuerySchema", () => {
+      const valid = restrictedAreaQuerySchema.safeParse({ page: "10000", limit: "20" });
+      assert.equal(valid.success, true);
+
+      const invalid = restrictedAreaQuerySchema.safeParse({ page: "10000000", limit: "20" });
+      assert.equal(invalid.success, false);
+    });
+  });
+
+  // ── SEC-39: Unrestricted polygon coordinates DoS ───────────────────────────
+  describe("SEC-39: UNRESTRICTED-POLYGON-COORDINATES-DOS", () => {
+    it("should accept valid polygon coordinates within 0 to 100,000", () => {
+      const point = polygonPointSchema.safeParse({ x: 100, y: 250 });
+      assert.equal(point.success, true);
+
+      const maxPoint = polygonPointSchema.safeParse({ x: 100000, y: 100000 });
+      assert.equal(maxPoint.success, true);
+    });
+
+    it("should reject negative coordinates", () => {
+      const negative = polygonPointSchema.safeParse({ x: -1, y: 10 });
+      assert.equal(negative.success, false);
+    });
+
+    it("should reject coordinates exceeding 100,000 or arbitrary large numbers", () => {
+      const exceedX = polygonPointSchema.safeParse({ x: 100001, y: 50 });
+      assert.equal(exceedX.success, false);
+      if (!exceedX.success) {
+        assert.ok(
+          exceedX.error.errors.some((e) =>
+            e.message.includes("Tọa độ x không được vượt quá 100,000"),
+          ),
+        );
+      }
+
+      const exceedY = polygonPointSchema.safeParse({ x: 50, y: 1e300 });
+      assert.equal(exceedY.success, false);
+      if (!exceedY.success) {
+        assert.ok(
+          exceedY.error.errors.some((e) =>
+            e.message.includes("Tọa độ y không được vượt quá 100,000"),
+          ),
+        );
+      }
+    });
+
+    it("should reject createRestrictedAreaSchema when boundary points exceed 100,000", () => {
+      const result = createRestrictedAreaSchema.safeParse({
+        name: "Test Restricted Area",
+        boundary: [
+          { x: 0, y: 0 },
+          { x: 100001, y: 0 },
+          { x: 50, y: 50 },
+        ],
+      });
+      assert.equal(result.success, false);
     });
   });
 });

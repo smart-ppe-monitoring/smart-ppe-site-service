@@ -95,14 +95,36 @@ siteApp.use(express.urlencoded({ extended: false, limit: "50kb" }));
 siteApp.use(cookieParser());
 
 // 3. Health check endpoints cho Traefik Gateway & Monitoring
-const healthHandler = async (_req: express.Request, res: express.Response) => {
-  let isHealthy = false;
-  try {
-    await sitePrisma.$queryRaw`SELECT 1`;
-    isHealthy = true;
-  } catch {
-    isHealthy = false;
+// SEC-37: Cache database health check result for 5 seconds to prevent DB connection pool starvation
+let lastDbCheckTime = 0;
+let cachedDbHealthy = false;
+export const DB_HEALTH_CACHE_TTL_MS = 5000;
+
+export async function checkDatabaseHealth(
+  force = false,
+  queryFn: () => Promise<any> = () => sitePrisma.$queryRaw`SELECT 1`,
+): Promise<boolean> {
+  const now = Date.now();
+  if (!force && now - lastDbCheckTime < DB_HEALTH_CACHE_TTL_MS) {
+    return cachedDbHealthy;
   }
+  try {
+    await queryFn();
+    cachedDbHealthy = true;
+  } catch {
+    cachedDbHealthy = false;
+  }
+  lastDbCheckTime = now;
+  return cachedDbHealthy;
+}
+
+export function resetDatabaseHealthCache(): void {
+  lastDbCheckTime = 0;
+  cachedDbHealthy = false;
+}
+
+const healthHandler = async (_req: express.Request, res: express.Response) => {
+  const isHealthy = await checkDatabaseHealth();
   const dbStatus = isHealthy ? "up" : "down";
 
   res.status(isHealthy ? 200 : 503).json({

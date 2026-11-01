@@ -112,7 +112,12 @@ export const updateSiteSchema = siteBaseSchema
   );
 
 export const siteQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
+  page: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(10000, "Số trang không được vượt quá 10,000")
+    .default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   search: z.string().trim().max(100).optional(),
   status: z
@@ -163,7 +168,12 @@ export const updateZoneSchema = createZoneSchema
   );
 
 export const zoneQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
+  page: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(10000, "Số trang không được vượt quá 10,000")
+    .default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   search: z.string().trim().max(100).optional(),
   siteId: uuidSchema.optional(),
@@ -212,11 +222,13 @@ export const polygonPointSchema = z.object({
   x: z
     .number({ required_error: "Tọa độ x là bắt buộc" })
     .finite("Tọa độ x phải là số hữu hạn")
-    .min(0, "Tọa độ x không được âm"),
+    .min(0, "Tọa độ x không được âm")
+    .max(100000, "Tọa độ x không được vượt quá 100,000"),
   y: z
     .number({ required_error: "Tọa độ y là bắt buộc" })
     .finite("Tọa độ y phải là số hữu hạn")
-    .min(0, "Tọa độ y không được âm"),
+    .min(0, "Tọa độ y không được âm")
+    .max(100000, "Tọa độ y không được vượt quá 100,000"),
 });
 
 export const createRestrictedAreaSchema = z.object({
@@ -261,7 +273,12 @@ export const updateRestrictedAreaSchema = z
   );
 
 export const restrictedAreaQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
+  page: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(10000, "Số trang không được vượt quá 10,000")
+    .default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   search: z.string().trim().max(100).optional(),
   siteId: uuidSchema.optional(),
