@@ -99,11 +99,30 @@ export async function authMiddleware(
       return;
     }
 
+    // SEC-02: Isolate purpose claims - reject 2FA temp tokens on business endpoints
+    if (payload.purpose && payload.purpose !== JWT_PURPOSE.ACCESS) {
+      next(
+        new AppError(
+          "Token không có quyền truy cập API nghiệp vụ",
+          401,
+          ERROR_CODE.UNAUTHORIZED,
+        ),
+      );
+      return;
+    }
+
+    // SEC-03: Extract tenancy scoping claims (siteId, siteIds) for BOLA protection
     req.user = {
       id: payload.id || payload.sub,
       email: payload.email,
       role: payload.role,
       roleId: payload.roleId,
+      siteId: payload.siteId || null,
+      siteIds: Array.isArray(payload.siteIds)
+        ? payload.siteIds
+        : payload.siteId
+          ? [payload.siteId]
+          : [],
       permissions: Array.isArray(payload.permissions) ? payload.permissions : [],
     };
 

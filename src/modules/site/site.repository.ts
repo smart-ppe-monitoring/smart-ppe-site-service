@@ -115,6 +115,9 @@ export class SiteRepository {
     if (query.status) {
       where.status = query.status;
     }
+    if ((query as any).siteIds && Array.isArray((query as any).siteIds)) {
+      where.id = { in: (query as any).siteIds };
+    }
     if (query.search?.trim()) {
       const search = query.search.trim();
       where.OR = [
@@ -243,6 +246,9 @@ export class SiteRepository {
     const where: any = {};
     if (query.siteId) {
       where.siteId = query.siteId;
+    }
+    if ((query as any).siteIds && Array.isArray((query as any).siteIds)) {
+      where.siteId = { in: (query as any).siteIds };
     }
     if (query.status) {
       where.status = query.status;
@@ -388,6 +394,9 @@ export class SiteRepository {
     const where: any = {};
     if (query.siteId) {
       where.siteId = query.siteId;
+    }
+    if ((query as any).siteIds && Array.isArray((query as any).siteIds)) {
+      where.siteId = { in: (query as any).siteIds };
     }
     if (query.zoneId) {
       where.zoneId = query.zoneId;

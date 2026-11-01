@@ -14,10 +14,22 @@ import {
   RestrictedAreaQueryDto,
 } from "./site.dto";
 import { DEFAULT_SAFETY_CONFIG } from "../../common/constants/site.constant";
+import { ROLES } from "../../common/constants/role.constant";
+import { formatPaginationMeta } from "../../common/helpers/pagination.helper";
 import {
   AUDIT_ACTION,
   AUDIT_TARGET_TYPE,
 } from "../../common/constants/audit-log.constant";
+
+export interface UserContext {
+  id?: string;
+  email?: string;
+  role?: string;
+  roleId?: string;
+  siteId?: string | null;
+  siteIds?: string[];
+  permissions?: string[];
+}
 
 export interface SiteAuditLogger {
   recordLog(data: {
@@ -40,8 +52,45 @@ export class SiteService {
     this.audit = audit;
   }
 
+  /**
+   * Resolves list of siteIds allowed for caller.
+   * Returns null if unrestricted (e.g. Admin or internal caller without user context).
+   */
+  private getAllowedSiteIds(user?: UserContext): string[] | null {
+    if (!user) return null;
+    if (user.role === ROLES.ADMIN || user.role === "ADMIN") return null;
+
+    const allowed = new Set<string>();
+    if (user.siteId) {
+      allowed.add(user.siteId);
+    }
+    if (Array.isArray(user.siteIds)) {
+      for (const sid of user.siteIds) {
+        if (sid) allowed.add(sid);
+      }
+    }
+    return Array.from(allowed);
+  }
+
+  /**
+   * Asserts caller has access to the specified siteId.
+   */
+  private assertSiteAccess(siteId?: string | null, user?: UserContext): void {
+    const allowed = this.getAllowedSiteIds(user);
+    if (allowed === null) {
+      return;
+    }
+    if (!siteId || !allowed.includes(siteId)) {
+      throw new AppError(
+        "Bạn không có quyền truy cập hoặc thực hiện thao tác trên công trường này",
+        403,
+        ERROR_CODE.FORBIDDEN,
+      );
+    }
+  }
+
   // ── Site Operations ────────────────────────────────────────────────────────
-  async createSite(data: CreateSiteDto, actorId?: string) {
+  async createSite(data: CreateSiteDto, actorId?: string, _user?: UserContext) {
     const existing = await this.repository.findSiteByCode(data.code);
     if (existing) {
       throw new AppError(
@@ -68,7 +117,8 @@ export class SiteService {
     return created;
   }
 
-  async findSiteById(id: string) {
+  async findSiteById(id: string, user?: UserContext) {
+    this.assertSiteAccess(id, user);
     const site = await this.repository.findSiteById(id);
     if (!site) {
       throw new AppError(
@@ -80,12 +130,30 @@ export class SiteService {
     return site;
   }
 
-  async findAllSites(query: SiteQueryDto) {
+  async findAllSites(query: SiteQueryDto, user?: UserContext) {
+    const allowed = this.getAllowedSiteIds(user);
+    if (allowed !== null) {
+      if (allowed.length === 0) {
+        return {
+          data: [],
+          meta: formatPaginationMeta(
+            Number(query.page) || 1,
+            Number(query.limit) || 20,
+            0,
+          ),
+        };
+      }
+      return this.repository.findAllSites({
+        ...query,
+        siteIds: allowed,
+      } as any);
+    }
     return this.repository.findAllSites(query);
   }
 
-  async updateSite(id: string, data: UpdateSiteDto, actorId?: string) {
-    await this.findSiteById(id);
+  async updateSite(id: string, data: UpdateSiteDto, actorId?: string, user?: UserContext) {
+    this.assertSiteAccess(id, user);
+    await this.findSiteById(id, user);
 
     if (data.code) {
       const existing = await this.repository.findSiteByCode(data.code);
@@ -112,8 +180,9 @@ export class SiteService {
     return updated;
   }
 
-  async deleteSite(id: string, force = false, actorId?: string) {
-    const site = await this.findSiteById(id);
+  async deleteSite(id: string, force = false, actorId?: string, user?: UserContext) {
+    this.assertSiteAccess(id, user);
+    const site = await this.findSiteById(id, user);
 
     const hasChildren =
       (site._count?.zones && site._count.zones > 0) ||
@@ -146,14 +215,16 @@ export class SiteService {
     return deleted;
   }
 
-  async archiveSite(id: string) {
-    await this.findSiteById(id);
+  async archiveSite(id: string, user?: UserContext) {
+    this.assertSiteAccess(id, user);
+    await this.findSiteById(id, user);
     return this.repository.archiveSite(id);
   }
 
   // ── Zone Operations ────────────────────────────────────────────────────────
-  async createZone(data: CreateZoneDto) {
-    await this.findSiteById(data.siteId);
+  async createZone(data: CreateZoneDto, user?: UserContext) {
+    this.assertSiteAccess(data.siteId, user);
+    await this.findSiteById(data.siteId, user);
 
     const existing = await this.repository.findZoneByCode(
       data.siteId,
@@ -170,7 +241,7 @@ export class SiteService {
     return this.repository.createZone(data);
   }
 
-  async findZoneById(id: string) {
+  async findZoneById(id: string, user?: UserContext) {
     const zone = await this.repository.findZoneById(id);
     if (!zone) {
       throw new AppError(
@@ -179,18 +250,38 @@ export class SiteService {
         ERROR_CODE.NOT_FOUND,
       );
     }
+    this.assertSiteAccess(zone.siteId, user);
     return zone;
   }
 
-  async findAllZones(query: ZoneQueryDto) {
+  async findAllZones(query: ZoneQueryDto, user?: UserContext) {
     if (query.siteId) {
-      await this.findSiteById(query.siteId);
+      this.assertSiteAccess(query.siteId, user);
+      await this.findSiteById(query.siteId, user);
+    } else {
+      const allowed = this.getAllowedSiteIds(user);
+      if (allowed !== null) {
+        if (allowed.length === 0) {
+          return {
+            data: [],
+            meta: formatPaginationMeta(
+              Number(query.page) || 1,
+              Number(query.limit) || 20,
+              0,
+            ),
+          };
+        }
+        return this.repository.findAllZones({
+          ...query,
+          siteIds: allowed,
+        } as any);
+      }
     }
     return this.repository.findAllZones(query);
   }
 
-  async updateZone(id: string, data: UpdateZoneDto) {
-    const zone = await this.findZoneById(id);
+  async updateZone(id: string, data: UpdateZoneDto, user?: UserContext) {
+    const zone = await this.findZoneById(id, user);
 
     if (data.code) {
       const existing = await this.repository.findZoneByCode(
@@ -209,14 +300,15 @@ export class SiteService {
     return this.repository.updateZone(id, data);
   }
 
-  async deleteZone(id: string) {
-    await this.findZoneById(id);
+  async deleteZone(id: string, user?: UserContext) {
+    await this.findZoneById(id, user);
     return this.repository.deleteZone(id);
   }
 
   // ── Safety Config Operations ───────────────────────────────────────────────
-  async getSafetyConfig(siteId: string) {
-    await this.findSiteById(siteId);
+  async getSafetyConfig(siteId: string, user?: UserContext) {
+    this.assertSiteAccess(siteId, user);
+    await this.findSiteById(siteId, user);
 
     const config = await this.repository.findSafetyConfigBySiteId(siteId);
     if (!config) {
@@ -238,17 +330,20 @@ export class SiteService {
     siteId: string,
     data: UpdateSiteSafetyConfigDto,
     updatedBy?: string,
+    user?: UserContext,
   ) {
-    await this.findSiteById(siteId);
+    this.assertSiteAccess(siteId, user);
+    await this.findSiteById(siteId, user);
     return this.repository.upsertSafetyConfig(siteId, data, updatedBy);
   }
 
   // ── Restricted Area Operations ─────────────────────────────────────────────
-  async createRestrictedArea(data: CreateRestrictedAreaDto) {
-    await this.findSiteById(data.siteId);
+  async createRestrictedArea(data: CreateRestrictedAreaDto, user?: UserContext) {
+    this.assertSiteAccess(data.siteId, user);
+    await this.findSiteById(data.siteId, user);
 
     if (data.zoneId) {
-      const zone = await this.findZoneById(data.zoneId);
+      const zone = await this.findZoneById(data.zoneId, user);
       if (zone.siteId !== data.siteId) {
         throw new AppError(
           "Phân khu được chỉ định không thuộc công trường này",
@@ -261,7 +356,7 @@ export class SiteService {
     return this.repository.createRestrictedArea(data);
   }
 
-  async findRestrictedAreaById(id: string) {
+  async findRestrictedAreaById(id: string, user?: UserContext) {
     const area = await this.repository.findRestrictedAreaById(id);
     if (!area) {
       throw new AppError(
@@ -270,12 +365,35 @@ export class SiteService {
         ERROR_CODE.NOT_FOUND,
       );
     }
+    this.assertSiteAccess(area.siteId, user);
     return area;
   }
 
-  async findAllRestrictedAreas(query: RestrictedAreaQueryDto) {
+  async findAllRestrictedAreas(
+    query: RestrictedAreaQueryDto,
+    user?: UserContext,
+  ) {
     if (query.siteId) {
-      await this.findSiteById(query.siteId);
+      this.assertSiteAccess(query.siteId, user);
+      await this.findSiteById(query.siteId, user);
+    } else {
+      const allowed = this.getAllowedSiteIds(user);
+      if (allowed !== null) {
+        if (allowed.length === 0) {
+          return {
+            data: [],
+            meta: formatPaginationMeta(
+              Number(query.page) || 1,
+              Number(query.limit) || 20,
+              0,
+            ),
+          };
+        }
+        return this.repository.findAllRestrictedAreas({
+          ...query,
+          siteIds: allowed,
+        } as any);
+      }
     }
     return this.repository.findAllRestrictedAreas(query);
   }
@@ -283,8 +401,10 @@ export class SiteService {
   async findRestrictedAreasByZone(
     zoneId: string,
     query: RestrictedAreaQueryDto,
+    user?: UserContext,
   ) {
-    const zone = await this.findZoneById(zoneId);
+    const zone = await this.findZoneById(zoneId, user);
+    this.assertSiteAccess(zone.siteId, user);
     return this.repository.findAllRestrictedAreas({
       ...query,
       siteId: zone.siteId,
@@ -292,11 +412,11 @@ export class SiteService {
     });
   }
 
-  async updateRestrictedArea(id: string, data: UpdateRestrictedAreaDto) {
-    const area = await this.findRestrictedAreaById(id);
+  async updateRestrictedArea(id: string, data: UpdateRestrictedAreaDto, user?: UserContext) {
+    const area = await this.findRestrictedAreaById(id, user);
 
     if (data.zoneId) {
-      const zone = await this.findZoneById(data.zoneId);
+      const zone = await this.findZoneById(data.zoneId, user);
       if (zone.siteId !== area.siteId) {
         throw new AppError(
           "Phân khu được chỉ định không thuộc công trường của vùng hạn chế này",
@@ -309,8 +429,8 @@ export class SiteService {
     return this.repository.updateRestrictedArea(id, data);
   }
 
-  async deleteRestrictedArea(id: string) {
-    await this.findRestrictedAreaById(id);
+  async deleteRestrictedArea(id: string, user?: UserContext) {
+    await this.findRestrictedAreaById(id, user);
     return this.repository.deleteRestrictedArea(id);
   }
 }
