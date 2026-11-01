@@ -85,3 +85,13 @@ export async function handleSiteShutdown(signal: string): Promise<void> {
 
 process.on("SIGTERM", () => void handleSiteShutdown("SIGTERM"));
 process.on("SIGINT", () => void handleSiteShutdown("SIGINT"));
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[Site Service] Unhandled Promise Rejection:", reason);
+  void handleSiteShutdown("unhandledRejection");
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("[Site Service] Uncaught Exception:", error);
+  void handleSiteShutdown("uncaughtException");
+});

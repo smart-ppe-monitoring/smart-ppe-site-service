@@ -21,7 +21,12 @@ import { jwtConfig } from "../src/config/jwt.config";
 import { SiteService } from "../src/modules/site/site.service";
 import { SiteRepository } from "../src/modules/site/site.repository";
 import { SafetyRuleService } from "../src/modules/safety-rule/safety-rule.service";
-import { SafetyRuleCacheService } from "../src/modules/safety-rule/safety-rule-cache.service";
+import {
+  SafetyRuleCacheService,
+  SAFETY_RULE_CACHE_PUBSUB_CHANNEL,
+} from "../src/modules/safety-rule/safety-rule-cache.service";
+import { isUuid, generateId, UUID_REGEX } from "../src/common/helpers/uuid.helper";
+import { maintenanceGuard } from "../src/middlewares/maintenance.middleware";
 import { updateSiteSafetyConfigSchema } from "../src/modules/site/site.validation";
 import { invalidateCacheSchema } from "../src/modules/safety-rule/safety-rule.validation";
 import { envSchema, envConfig } from "../src/config/env.config";
@@ -2181,6 +2186,325 @@ describe("Security Patches Regression Suite (SEC-01, SEC-02, SEC-03)", () => {
       assert.equal(content.includes("default-smart-ppe-master-encryption-key-32b"), false);
       assert.equal(content.includes("process.env.ENCRYPTION_KEY"), false);
       assert.ok(content.includes("envConfig.encryptionKey"));
+    });
+  });
+
+  // ── SEC-28: Process-Local In-Memory Safety Cache Drift in Cluster ──────────
+  describe("SEC-28: IN-MEMORY-SAFETY-CACHE-DRIFT-IN-CLUSTER", () => {
+    it("should broadcast cache invalidation via Redis Pub/Sub channel and evict matching keys on remote instances", () => {
+      const instanceA = new SafetyRuleCacheService();
+      const instanceB = new SafetyRuleCacheService();
+
+      const publishedMessages: { channel: string; message: string }[] = [];
+      const mockPublisher = {
+        publish: async (channel: string, message: string) => {
+          publishedMessages.push({ channel, message });
+          // Deliver to instance B
+          instanceB.handleRemoteInvalidation(message);
+        },
+      };
+
+      instanceA.setPublisherClient(mockPublisher);
+
+      const dummyConfig = {
+        siteId: "site-tenant-1",
+        siteName: "Site 1",
+        siteCode: "S1",
+        effectiveConfig: {
+          confidenceThreshold: 0.85,
+          confirmationDuration: 2,
+          cooldownDuration: 30,
+          enableNoHelmet: true,
+          enableNoVest: true,
+          enableRestrictedArea: true,
+          modelVersionId: null,
+          source: "SITE_LEVEL" as any,
+        },
+        restrictedAreas: [],
+      };
+
+      // Both instances cache the site config
+      instanceA.set("effective:site:site-tenant-1", dummyConfig);
+      instanceB.set("effective:site:site-tenant-1", dummyConfig);
+
+      assert.ok(instanceA.get("effective:site:site-tenant-1"));
+      assert.ok(instanceB.get("effective:site:site-tenant-1"));
+
+      // Instance A invalidates site-tenant-1
+      instanceA.invalidateSite("site-tenant-1");
+
+      // Verify Instance A evicted locally
+      assert.equal(instanceA.get("effective:site:site-tenant-1"), null);
+
+      // Verify Pub/Sub published message to correct channel
+      assert.equal(publishedMessages.length, 1);
+      assert.equal(publishedMessages[0].channel, SAFETY_RULE_CACHE_PUBSUB_CHANNEL);
+      const payload = JSON.parse(publishedMessages[0].message);
+      assert.equal(payload.type, "SITE");
+      assert.equal(payload.id, "site-tenant-1");
+
+      // Verify Instance B evicted its stale cache via remote invalidation
+      assert.equal(instanceB.get("effective:site:site-tenant-1"), null);
+    });
+
+    it("should handle remote camera invalidation and ignore self-broadcast loop", () => {
+      const instance = new SafetyRuleCacheService();
+      const instanceId = instance.getInstanceId();
+
+      const dummyConfig = {
+        siteId: "site-tenant-2",
+        siteName: "Site 2",
+        siteCode: "S2",
+        effectiveConfig: {
+          confidenceThreshold: 0.8,
+          confirmationDuration: 2,
+          cooldownDuration: 30,
+          enableNoHelmet: true,
+          enableNoVest: true,
+          enableRestrictedArea: true,
+          modelVersionId: null,
+          source: "SITE_LEVEL" as any,
+        },
+        restrictedAreas: [],
+      };
+
+      instance.set("effective:site:site-tenant-2:camera:cam-99", dummyConfig);
+      assert.ok(instance.get("effective:site:site-tenant-2:camera:cam-99"));
+
+      // 1. Remote message from self should be ignored
+      instance.handleRemoteInvalidation(
+        JSON.stringify({
+          type: "CAMERA",
+          id: "cam-99",
+          senderId: instanceId, // Self message
+        }),
+      );
+      assert.ok(instance.get("effective:site:site-tenant-2:camera:cam-99"));
+
+      // 2. Remote message from another instance should evict
+      instance.handleRemoteInvalidation(
+        JSON.stringify({
+          type: "CAMERA",
+          id: "cam-99",
+          senderId: "remote-instance-xyz",
+        }),
+      );
+      assert.equal(instance.get("effective:site:site-tenant-2:camera:cam-99"), null);
+    });
+
+    it("should handle remote CLEAR message across cluster", () => {
+      const instance = new SafetyRuleCacheService();
+      const dummyConfig = {
+        siteId: "site-3",
+        siteName: "Site 3",
+        siteCode: "S3",
+        effectiveConfig: {} as any,
+        restrictedAreas: [],
+      };
+
+      instance.set("key1", dummyConfig);
+      instance.set("key2", dummyConfig);
+      assert.equal(instance.size(), 2);
+
+      instance.handleRemoteInvalidation(
+        JSON.stringify({
+          type: "CLEAR",
+          senderId: "another-pod",
+        }),
+      );
+      assert.equal(instance.size(), 0);
+    });
+  });
+
+  // ── SEC-29: Loose UUID Regex Validation PostgreSQL Crash ────────────────────
+  describe("SEC-29: LOOSE-UUID-REGEX-VALIDATION-POSTGRES-CRASH", () => {
+    it("should reject non-RFC hyphenated strings that would crash PostgreSQL 22P02", () => {
+      // 36 hyphens (passed with /^[0-9a-fA-F-]{36}$/)
+      assert.equal(isUuid("------------------------------------"), false);
+
+      // Misplaced hyphens
+      assert.equal(isUuid("12345678-1234-1234-12345-6789012345"), false);
+      assert.equal(isUuid("123456781234-1234-1234-123456789012"), false);
+
+      // Invalid characters
+      assert.equal(isUuid("g2345678-1234-1234-1234-123456789012"), false);
+      assert.equal(isUuid("12345678-1234-1234-1234-12345678901z"), false);
+
+      // Non-string or incorrect length
+      assert.equal(isUuid(null), false);
+      assert.equal(isUuid(undefined), false);
+      assert.equal(isUuid(""), false);
+      assert.equal(isUuid("1234"), false);
+    });
+
+    it("should accept valid RFC 4122 and RFC 9562 UUID strings (v4 and v7)", () => {
+      const v4 = crypto.randomUUID();
+      const v7 = generateId();
+
+      assert.equal(isUuid(v4), true);
+      assert.equal(isUuid(v7), true);
+      assert.equal(isUuid("018d3e60-8433-7000-8000-000000000000"), true);
+      assert.equal(isUuid("a1b2c3d4-e5f6-7890-abcd-ef1234567890"), true);
+    });
+
+    it("UUID_REGEX pattern must enforce strict 8-4-4-4-12 group format", () => {
+      assert.equal(
+        UUID_REGEX.source,
+        "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      );
+    });
+  });
+
+  // ── SEC-30: No-op Maintenance Guard Governance Bypass ───────────────────────
+  describe("SEC-30: MAINTENANCE-GUARD-NOOP-GOVERNANCE-BYPASS", () => {
+    it("should allow requests when maintenance mode is inactive", async () => {
+      const guard = maintenanceGuard({ isMaintenanceMode: false });
+      const req = {
+        url: "/api/v1/sites",
+        user: { role: ROLES.OPERATOR },
+      } as unknown as Request;
+
+      let nextCalled = false;
+      let errorThrown: any = null;
+      await guard(req, {} as Response, (err) => {
+        nextCalled = true;
+        errorThrown = err;
+      });
+
+      assert.equal(nextCalled, true);
+      assert.equal(errorThrown, undefined);
+    });
+
+    it("should block non-admin requests with 503 SERVICE_UNAVAILABLE when maintenance mode is active", async () => {
+      const guard = maintenanceGuard({ isMaintenanceMode: true });
+      const req = {
+        url: "/api/v1/sites",
+        user: { role: ROLES.OPERATOR },
+      } as unknown as Request;
+
+      let errorThrown: any = null;
+      await guard(req, {} as Response, (err) => {
+        errorThrown = err;
+      });
+
+      assert.ok(errorThrown instanceof AppError);
+      assert.equal(errorThrown.statusCode, 503);
+      assert.equal(errorThrown.code, ERROR_CODE.SERVICE_UNAVAILABLE);
+      assert.match(errorThrown.message, /bảo trì/);
+    });
+
+    it("should allow ADMIN users to bypass active maintenance mode", async () => {
+      const guard = maintenanceGuard({ isMaintenanceMode: true });
+      const req = {
+        url: "/api/v1/sites",
+        user: { role: ROLES.ADMIN },
+      } as unknown as Request;
+
+      let nextCalled = false;
+      let errorThrown: any = null;
+      await guard(req, {} as Response, (err) => {
+        nextCalled = true;
+        errorThrown = err;
+      });
+
+      assert.equal(nextCalled, true);
+      assert.equal(errorThrown, undefined);
+    });
+
+    it("should allow users with MAINTENANCE_BYPASS permission to bypass maintenance", async () => {
+      const guard = maintenanceGuard({ isMaintenanceMode: true });
+      const req = {
+        url: "/api/v1/sites",
+        user: { role: ROLES.OPERATOR, permissions: ["MAINTENANCE_BYPASS"] },
+      } as unknown as Request;
+
+      let nextCalled = false;
+      let errorThrown: any = null;
+      await guard(req, {} as Response, (err) => {
+        nextCalled = true;
+        errorThrown = err;
+      });
+
+      assert.equal(nextCalled, true);
+      assert.equal(errorThrown, undefined);
+    });
+
+    it("should allow exempt health check and openapi paths during maintenance", async () => {
+      const guard = maintenanceGuard({ isMaintenanceMode: true });
+
+      const exemptPaths = ["/health", "/health/live", "/api/v1/sites/health", "/openapi.json"];
+
+      for (const exemptPath of exemptPaths) {
+        const req = {
+          url: exemptPath,
+          user: { role: ROLES.OPERATOR },
+        } as unknown as Request;
+
+        let nextCalled = false;
+        let errorThrown: any = null;
+        await guard(req, {} as Response, (err) => {
+          nextCalled = true;
+          errorThrown = err;
+        });
+
+        assert.equal(nextCalled, true, `Expected ${exemptPath} to be exempt`);
+        assert.equal(errorThrown, undefined);
+      }
+    });
+
+    it("should respect process.env.MAINTENANCE_MODE when no options are provided", async () => {
+      const originalEnv = process.env.MAINTENANCE_MODE;
+      try {
+        process.env.MAINTENANCE_MODE = "true";
+        const guard = maintenanceGuard();
+        const req = {
+          url: "/api/v1/sites",
+          user: { role: ROLES.OPERATOR },
+        } as unknown as Request;
+
+        let errorThrown: any = null;
+        await guard(req, {} as Response, (err) => {
+          errorThrown = err;
+        });
+
+        assert.ok(errorThrown instanceof AppError);
+        assert.equal(errorThrown.statusCode, 503);
+      } finally {
+        process.env.MAINTENANCE_MODE = originalEnv;
+      }
+    });
+  });
+
+  // ── SEC-31: Missing Unhandled Rejection Graceful Shutdown Handlers ──────────
+  describe("SEC-31: MISSING-UNHANDLED-REJECTION-GRACEFUL-SHUTDOWN-HANDLERS", () => {
+    it("src/server.ts must register unhandledRejection and uncaughtException handlers", () => {
+      const serverPath = path.resolve(__dirname, "../src/server.ts");
+      const content = fs.readFileSync(serverPath, "utf8");
+
+      assert.ok(
+        content.includes('process.on("unhandledRejection"'),
+        "server.ts must register unhandledRejection handler",
+      );
+      assert.ok(
+        content.includes('process.on("uncaughtException"'),
+        "server.ts must register uncaughtException handler",
+      );
+      assert.ok(content.includes("handleSiteShutdown"));
+    });
+
+    it("src/site.server.ts must register unhandledRejection and uncaughtException handlers", () => {
+      const siteServerPath = path.resolve(__dirname, "../src/site.server.ts");
+      const content = fs.readFileSync(siteServerPath, "utf8");
+
+      assert.ok(
+        content.includes('process.on("unhandledRejection"'),
+        "site.server.ts must register unhandledRejection handler",
+      );
+      assert.ok(
+        content.includes('process.on("uncaughtException"'),
+        "site.server.ts must register uncaughtException handler",
+      );
+      assert.ok(content.includes("handleSiteShutdown"));
     });
   });
 });
