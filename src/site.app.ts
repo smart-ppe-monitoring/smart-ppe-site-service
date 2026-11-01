@@ -90,8 +90,8 @@ const corsOptions: cors.CorsOptions = {
 };
 siteApp.use(cors(corsOptions));
 siteApp.use(morgan(envConfig.nodeEnv === "production" ? "combined" : "dev"));
-siteApp.use(express.json({ limit: "2mb" }));
-siteApp.use(express.urlencoded({ extended: true, limit: "2mb" }));
+siteApp.use(express.json({ limit: "100kb" }));
+siteApp.use(express.urlencoded({ extended: false, limit: "50kb" }));
 siteApp.use(cookieParser());
 
 // 3. Health check endpoints cho Traefik Gateway & Monitoring

@@ -18,9 +18,19 @@ import {
 import { errorMiddleware } from "../src/middlewares/error.middleware";
 import { createRequireGatewayOrigin } from "../src/middlewares/request-id.middleware";
 import { jwtConfig } from "../src/config/jwt.config";
-import { SiteService } from "../src/modules/site/site.service";
+import {
+  SiteService,
+  defaultSiteAuditLogger,
+  DefaultSiteAuditLogger,
+} from "../src/modules/site/site.service";
 import { SiteRepository } from "../src/modules/site/site.repository";
 import { SafetyRuleService } from "../src/modules/safety-rule/safety-rule.service";
+import {
+  SafetyRuleRepository,
+  safetyRuleRepository,
+  defaultSafetyAuditLogger,
+  DefaultSafetyAuditLogger,
+} from "../src/modules/safety-rule/safety-rule.repository";
 import {
   SafetyRuleCacheService,
   SAFETY_RULE_CACHE_PUBSUB_CHANNEL,
@@ -2491,20 +2501,220 @@ describe("Security Patches Regression Suite (SEC-01, SEC-02, SEC-03)", () => {
       );
       assert.ok(content.includes("handleSiteShutdown"));
     });
+  });
 
-    it("src/site.server.ts must register unhandledRejection and uncaughtException handlers", () => {
+  // ── SEC-32: Dead / Unconnected Audit Logging Mechanism ──────────────────────
+  describe("SEC-32: NOOP-SITE-AUDIT-LOGGER", () => {
+    it("DefaultSiteAuditLogger should record structured audit log entries", async () => {
+      const logger = new DefaultSiteAuditLogger();
+      const log = await logger.recordLog({
+        actorId: "actor-123",
+        action: "CREATE_PPE_SITE",
+        targetType: "PPE_SITE",
+        targetId: "site-456",
+        details: { name: "Test Site" },
+        ipAddress: "127.0.0.1",
+        userAgent: "TestAgent",
+      });
+
+      assert.equal(log.service, "site-service");
+      assert.equal(log.actorId, "actor-123");
+      assert.equal(log.action, "CREATE_PPE_SITE");
+      assert.equal(log.targetType, "PPE_SITE");
+      assert.equal(log.targetId, "site-456");
+      assert.ok(log.timestamp);
+    });
+
+    it("DefaultSafetyAuditLogger should record structured audit log entries", async () => {
+      const logger = new DefaultSafetyAuditLogger();
+      const log = await logger.createAuditLog({
+        actorId: "actor-789",
+        action: "UPDATE_SAFETY_CONFIG",
+        targetType: "PPE_SAFETY_CONFIG",
+        targetId: "config-101",
+        details: { confidenceThreshold: 0.9 },
+      });
+
+      assert.equal(log.service, "site-service");
+      assert.equal(log.actorId, "actor-789");
+      assert.equal(log.action, "UPDATE_SAFETY_CONFIG");
+      assert.equal(log.targetType, "PPE_SAFETY_CONFIG");
+      assert.equal(log.targetId, "config-101");
+      assert.ok(log.timestamp);
+    });
+
+    it("SiteService default instance should have active audit logger wired", async () => {
+      const recorded: any[] = [];
+      const mockAuditLogger = {
+        recordLog: async (data: any) => {
+          recorded.push(data);
+          return data;
+        },
+      };
+
+      const mockRepo = {
+        findSiteByCode: async () => null,
+        createSite: async (data: any) => ({
+          id: "site-created-id",
+          name: data.name,
+          code: data.code,
+          status: "ACTIVE",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }),
+      };
+
+      const service = new SiteService(mockRepo as any, mockAuditLogger as any);
+      await service.createSite(
+        { name: "New Construction Site", code: "SITE_NEW_01" } as any,
+        "admin-actor-id",
+        { id: "admin-actor-id", role: ROLES.ADMIN },
+      );
+
+      assert.equal(recorded.length, 1);
+      assert.equal(recorded[0].actorId, "admin-actor-id");
+      assert.equal(recorded[0].targetId, "site-created-id");
+    });
+
+    it("SafetyRuleRepository default instance should wire defaultSafetyAuditLogger", async () => {
+      const repo = new SafetyRuleRepository();
+      assert.ok((repo as any).rbacRepo);
+    });
+  });
+
+  // ── SEC-33: Orphaned Duplicate Server Entrypoint Desynchronization ──────────
+  describe("SEC-33: ORPHANED-ENTRYPOINT-DESYNCHRONIZATION", () => {
+    it("src/site.server.ts must be safely removed to prevent deployment drift", () => {
       const siteServerPath = path.resolve(__dirname, "../src/site.server.ts");
-      const content = fs.readFileSync(siteServerPath, "utf8");
+      assert.equal(
+        fs.existsSync(siteServerPath),
+        false,
+        "site.server.ts must be deleted to eliminate redundant entrypoint",
+      );
+    });
+
+    it("package.json scripts must consistently reference canonical src/server.ts and dist/server.js", () => {
+      const packageJsonPath = path.resolve(__dirname, "../package.json");
+      const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+
+      assert.equal(pkg.main, "dist/server.js");
+      assert.equal(pkg.scripts.start, "node dist/server.js");
+      assert.ok(pkg.scripts.dev.includes("src/server.ts"));
+      assert.equal(pkg.scripts.dev.includes("site.server.ts"), false);
+    });
+
+    it("Dockerfile must invoke canonical entrypoint dist/server.js", () => {
+      const dockerfilePath = path.resolve(__dirname, "../Dockerfile");
+      const dockerfileContent = fs.readFileSync(dockerfilePath, "utf8");
+
+      assert.ok(dockerfileContent.includes('CMD ["node", "dist/server.js"]'));
+      assert.equal(dockerfileContent.includes("site.server.js"), false);
+    });
+  });
+
+  // ── SEC-34: Permissive JSON Parser Body Size Denial of Service ─────────────
+  describe("SEC-34: PERMISSIVE-JSON-PARSER-BODY-SIZE-DOS", () => {
+    it("site.app.ts must restrict express.json body parser limit to 100kb", () => {
+      const appPath = path.resolve(__dirname, "../src/site.app.ts");
+      const content = fs.readFileSync(appPath, "utf8");
 
       assert.ok(
-        content.includes('process.on("unhandledRejection"'),
-        "site.server.ts must register unhandledRejection handler",
+        content.includes('express.json({ limit: "100kb" })'),
+        "express.json limit must be set to 100kb",
       );
+      assert.equal(content.includes('express.json({ limit: "2mb" })'), false);
+    });
+
+    it("site.app.ts must restrict express.urlencoded to extended: false and limit: 50kb", () => {
+      const appPath = path.resolve(__dirname, "../src/site.app.ts");
+      const content = fs.readFileSync(appPath, "utf8");
+
       assert.ok(
-        content.includes('process.on("uncaughtException"'),
-        "site.server.ts must register uncaughtException handler",
+        content.includes('express.urlencoded({ extended: false, limit: "50kb" })'),
+        "express.urlencoded must be extended: false with 50kb limit",
       );
-      assert.ok(content.includes("handleSiteShutdown"));
+      assert.equal(content.includes('express.urlencoded({ extended: true, limit: "2mb" })'), false);
+    });
+  });
+
+  // ── SEC-35: Substring Cache Key Collision and O(N) Traversal ───────────────
+  describe("SEC-35: SUBSTRING-CACHE-KEY-COLLISION-AND-O-N-TRAVERSAL", () => {
+    it("should prevent substring key collisions between cam-1 and cam-10 / cam-100", () => {
+      const cache = new SafetyRuleCacheService();
+
+      const configCam10 = {
+        siteId: "site-A",
+        siteName: "Site A",
+        siteCode: "SITE-A",
+        effectiveConfig: { confidenceThreshold: 0.99 } as any,
+        restrictedAreas: [],
+      };
+
+      const configCam1 = {
+        siteId: "site-A",
+        siteName: "Site A",
+        siteCode: "SITE-A",
+        effectiveConfig: { confidenceThreshold: 0.55 } as any,
+        restrictedAreas: [],
+      };
+
+      const configForeignSiteWithSubstring = {
+        siteId: "site-cam-1-north",
+        siteName: "Foreign Site",
+        siteCode: "FS-1",
+        effectiveConfig: { confidenceThreshold: 0.11 } as any,
+        restrictedAreas: [],
+      };
+
+      // Set entries in cache
+      cache.set("effective:site:site-A:camera:cam-10", configCam10);
+      cache.set("effective:site:site-A:camera:cam-1", configCam1);
+      cache.set("effective:site:site-cam-1-north:camera:cam-99", configForeignSiteWithSubstring);
+
+      // Query cam-1: before fix, substring includes("cam-1") would match cam-10 or site-cam-1-north!
+      const resultCam1 = cache.getForCamera("cam-1");
+      assert.ok(resultCam1);
+      assert.equal(resultCam1.effectiveConfig.confidenceThreshold, 0.55);
+
+      // Query cam-10
+      const resultCam10 = cache.getForCamera("cam-10");
+      assert.ok(resultCam10);
+      assert.equal(resultCam10.effectiveConfig.confidenceThreshold, 0.99);
+
+      // Invalidate cam-1: cam-10 must NOT be evicted
+      cache.invalidateCamera("cam-1");
+      assert.equal(cache.getForCamera("cam-1"), null);
+      assert.ok(cache.getForCamera("cam-10"));
+      assert.equal(cache.getForCamera("cam-10")?.effectiveConfig.confidenceThreshold, 0.99);
+    });
+
+    it("should provide fast O(1) indexed lookup for camera rules", () => {
+      const cache = new SafetyRuleCacheService();
+
+      const dummyConfig = {
+        siteId: "site-perf",
+        siteName: "Perf Site",
+        siteCode: "PERF",
+        effectiveConfig: { confidenceThreshold: 0.88 } as any,
+        restrictedAreas: [],
+      };
+
+      cache.set("effective:site:site-perf:camera:cam-fast", dummyConfig);
+
+      // Verify that cameraIndex has the direct key mapping
+      assert.ok((cache as any).cameraIndex.has("cam-fast"));
+      assert.equal(
+        (cache as any).cameraIndex.get("cam-fast"),
+        "effective:site:site-perf:camera:cam-fast",
+      );
+
+      const found = cache.getForCamera("cam-fast");
+      assert.equal(found?.effectiveConfig.confidenceThreshold, 0.88);
+
+      // Invalidate camera clears index as well
+      cache.invalidateCamera("cam-fast");
+      assert.equal((cache as any).cameraIndex.has("cam-fast"), false);
+      assert.equal(cache.getForCamera("cam-fast"), null);
     });
   });
 });

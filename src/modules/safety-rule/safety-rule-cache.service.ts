@@ -17,6 +17,7 @@ interface CacheEntry {
 
 export class SafetyRuleCacheService {
   private cache = new Map<string, CacheEntry>();
+  private cameraIndex = new Map<string, string>();
   private readonly defaultTtlMs: number;
   private readonly instanceId: string = Math.random().toString(36).substring(2, 10);
   private publisherClient: any = null;
@@ -32,6 +33,7 @@ export class SafetyRuleCacheService {
 
     if (Date.now() > entry.expiresAt) {
       this.cache.delete(key);
+      this.cleanCameraIndexKey(key);
       return null;
     }
 
@@ -49,12 +51,16 @@ export class SafetyRuleCacheService {
       for (const [k, v] of this.cache.entries()) {
         if (now > v.expiresAt) {
           this.cache.delete(k);
+          this.cleanCameraIndexKey(k);
         }
       }
       // Nếu vẫn đầy, xóa phần tử cũ nhất
       if (this.cache.size >= SAFETY_RULE_CACHE_CONFIG.MAX_ENTRIES) {
         const firstKey = this.cache.keys().next().value;
-        if (firstKey) this.cache.delete(firstKey);
+        if (firstKey) {
+          this.cache.delete(firstKey);
+          this.cleanCameraIndexKey(firstKey);
+        }
       }
     }
 
@@ -62,25 +68,61 @@ export class SafetyRuleCacheService {
       data,
       expiresAt: Date.now() + ttlMs,
     });
+
+    // SEC-35: Lập chỉ mục camera O(1) để tránh O(N) linear traversal và substring collision
+    const cameraMatch = key.match(/:camera:([^:]+)$/);
+    if (cameraMatch && cameraMatch[1]) {
+      this.cameraIndex.set(cameraMatch[1], key);
+    }
   }
 
+  /**
+   * SEC-35: Truy xuất cấu hình hiệu lực của camera theo O(1) index,
+   * sử dụng exact regex matching thay vì substring key.includes(cameraId).
+   */
   getForCamera(cameraId?: string): EffectiveSafetyConfigResultDto | null {
     if (!cameraId) return null;
+
+    // 1. O(1) Direct Index Lookup
+    const indexedKey = this.cameraIndex.get(cameraId);
+    if (indexedKey) {
+      const cached = this.get(indexedKey);
+      if (cached) return cached;
+      this.cameraIndex.delete(cameraId);
+    }
+
+    // 2. Fallback: Exact anchored regex match (:camera:${cameraId}$) để chống collision
+    const cameraPattern = new RegExp(`:camera:${cameraId}$`);
     for (const key of this.cache.keys()) {
-      if (key.includes(cameraId)) {
+      if (cameraPattern.test(key)) {
+        this.cameraIndex.set(cameraId, key);
         return this.get(key);
       }
     }
     return null;
   }
 
+  /**
+   * SEC-35: Vô hiệu hóa cache camera chính xác qua chỉ mục và exact regex match
+   */
   invalidateCamera(cameraId?: string, isRemote = false): void {
     if (!cameraId) return;
+
+    // 1. Xóa theo O(1) index
+    const indexedKey = this.cameraIndex.get(cameraId);
+    if (indexedKey) {
+      this.cache.delete(indexedKey);
+      this.cameraIndex.delete(cameraId);
+    }
+
+    // 2. Quét dọn các key khớp exact pattern :camera:${cameraId}$
+    const cameraPattern = new RegExp(`:camera:${cameraId}$`);
     for (const key of this.cache.keys()) {
-      if (key.includes(cameraId)) {
+      if (cameraPattern.test(key)) {
         this.cache.delete(key);
       }
     }
+
     if (!isRemote) {
       this.broadcastInvalidation({
         type: "CAMERA",
@@ -95,6 +137,7 @@ export class SafetyRuleCacheService {
     for (const key of this.cache.keys()) {
       if (key.includes(siteId)) {
         this.cache.delete(key);
+        this.cleanCameraIndexKey(key);
       }
     }
     if (!isRemote) {
@@ -108,11 +151,20 @@ export class SafetyRuleCacheService {
 
   clear(isRemote = false): void {
     this.cache.clear();
+    this.cameraIndex.clear();
     if (!isRemote) {
       this.broadcastInvalidation({
         type: "CLEAR",
         senderId: this.instanceId,
       });
+    }
+  }
+
+  private cleanCameraIndexKey(key: string): void {
+    for (const [camId, k] of this.cameraIndex.entries()) {
+      if (k === key) {
+        this.cameraIndex.delete(camId);
+      }
     }
   }
 

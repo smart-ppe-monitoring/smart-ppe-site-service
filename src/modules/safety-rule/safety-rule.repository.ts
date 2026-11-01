@@ -14,6 +14,30 @@ export interface SafetyAuditLogger {
 }
 
 /**
+ * SEC-32: Default Safety Audit Logger thực hiện ghi nhật ký kiểm toán có cấu trúc (JSON Structured Logging)
+ * ngăn chặn tình trạng thất thoát audit logs khi cập nhật cấu hình an toàn.
+ */
+export class DefaultSafetyAuditLogger implements SafetyAuditLogger {
+  async createAuditLog(data: any): Promise<any> {
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      service: "site-service",
+      actorId: data.actorId || "SYSTEM",
+      action: data.action,
+      targetType: data.targetType,
+      targetId: data.targetId,
+      details: data.details,
+      ipAddress: data.ipAddress,
+      userAgent: data.userAgent,
+    };
+    console.log(`[AUDIT] ${JSON.stringify(logEntry)}`);
+    return logEntry;
+  }
+}
+
+export const defaultSafetyAuditLogger = new DefaultSafetyAuditLogger();
+
+/**
  * SafetyRuleRepository — Tầng truy cập dữ liệu thuần túy cho Site & Safety Config
  *
  * Tuân thủ Clean Architecture (5 Layers) & Database-per-Service:
@@ -25,7 +49,7 @@ export class SafetyRuleRepository {
   private readonly rbacRepo?: SafetyAuditLogger;
 
   constructor(rbacRepo?: SafetyAuditLogger) {
-    this.rbacRepo = rbacRepo;
+    this.rbacRepo = rbacRepo !== undefined ? rbacRepo : defaultSafetyAuditLogger;
   }
 
   // ── Site & Site Safety Config ──────────────────────────────────────────────

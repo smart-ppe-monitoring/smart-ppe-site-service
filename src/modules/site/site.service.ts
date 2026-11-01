@@ -47,6 +47,38 @@ export interface SiteAuditLogger {
   }): Promise<any>;
 }
 
+/**
+ * SEC-32: Default Site Audit Logger thực hiện ghi nhật ký kiểm toán có cấu trúc (JSON Structured Logging)
+ * ngăn chặn tình trạng thất thoát audit logs khi site service vận hành.
+ */
+export class DefaultSiteAuditLogger implements SiteAuditLogger {
+  async recordLog(data: {
+    actorId?: string;
+    action: string;
+    targetType: string;
+    targetId: string;
+    details?: any;
+    ipAddress?: string;
+    userAgent?: string;
+  }): Promise<any> {
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      service: "site-service",
+      actorId: data.actorId || "SYSTEM",
+      action: data.action,
+      targetType: data.targetType,
+      targetId: data.targetId,
+      details: data.details,
+      ipAddress: data.ipAddress,
+      userAgent: data.userAgent,
+    };
+    console.log(`[AUDIT] ${JSON.stringify(logEntry)}`);
+    return logEntry;
+  }
+}
+
+export const defaultSiteAuditLogger = new DefaultSiteAuditLogger();
+
 export class SiteService {
   private readonly repository: SiteRepository;
   private readonly audit?: SiteAuditLogger;
@@ -58,7 +90,7 @@ export class SiteService {
     cache?: SafetyRuleCacheService,
   ) {
     this.repository = repository || siteRepository;
-    this.audit = audit;
+    this.audit = audit !== undefined ? audit : defaultSiteAuditLogger;
     this.cache = cache || safetyRuleCacheService;
   }
 
