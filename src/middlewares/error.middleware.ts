@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { Prisma } from "@prisma/client-site";
 import { ZodError } from "zod";
-import multer from "multer";
 import { AppError } from "../common/errors/app-error";
 import { ERROR_CODE } from "../common/errors/error-code";
 
@@ -76,11 +75,15 @@ export function errorMiddleware(
     return;
   }
 
-  if (error instanceof multer.MulterError) {
+  if (
+    (error as any)?.name === "MulterError" ||
+    (error as any)?.constructor?.name === "MulterError"
+  ) {
+    const multerErr = error as any;
     const message =
-      error.code === "LIMIT_FILE_SIZE"
+      multerErr.code === "LIMIT_FILE_SIZE"
         ? "Kích thước tệp tin vượt quá giới hạn tối đa cho phép"
-        : `Lỗi tải lên tệp tin: ${error.message}`;
+        : `Lỗi tải lên tệp tin: ${multerErr.message}`;
     res.status(400).json({
       success: false,
       message,
