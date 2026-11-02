@@ -162,6 +162,28 @@ export function registerSiteOpenApi(): void {
     },
   });
 
+  openapiRegistry.registerPath({
+    method: "post",
+    path: "/sites/{id}/archive",
+    tags: ["Sites"],
+    summary: "Lưu trữ / đóng băng công trường",
+    security: [{ BearerAuth: [] }],
+    request: { params: siteIdParamSchema },
+    responses: {
+      200: {
+        description: "Lưu trữ công trường thành công",
+        content: {
+          "application/json": {
+            schema: z.object({
+              success: z.boolean(),
+              data: z.any(),
+            }),
+          },
+        },
+      },
+    },
+  });
+
   // Safety Config
   openapiRegistry.registerPath({
     method: "get",
