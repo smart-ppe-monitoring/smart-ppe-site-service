@@ -14,9 +14,6 @@ importers:
       '@prisma/client':
         specifier: ^5.22.0
         version: 5.22.0(prisma@5.22.0)
-      '@smart-ppe/common':
-        specifier: git+https://github.com/smart-ppe-monitoring/smart-ppe-shared-contracts.git
-        version: https://codeload.github.com/smart-ppe-monitoring/smart-ppe-shared-contracts/tar.gz/38c57d25258b73126bdd31cb05d5cdb34f0c1555
       cookie-parser:
         specifier: ^1.4.7
         version: 1.4.7
@@ -285,10 +282,6 @@ packages:
 
   '@prisma/get-platform@5.22.0':
     resolution: {integrity: sha512-pHhpQdr1UPFpt+zFfnPazhulaZYCUqeIcPpJViYoq9R+D/yw4fjE+CtnsnKzPYm0ddUbeXUzjGVGIRVgPDCk4Q==}
-
-  '@smart-ppe/common@https://codeload.github.com/smart-ppe-monitoring/smart-ppe-shared-contracts/tar.gz/38c57d25258b73126bdd31cb05d5cdb34f0c1555':
-    resolution: {tarball: https://codeload.github.com/smart-ppe-monitoring/smart-ppe-shared-contracts/tar.gz/38c57d25258b73126bdd31cb05d5cdb34f0c1555}
-    version: 1.0.0
 
   '@tsconfig/node10@1.0.13':
     resolution: {integrity: sha512-gcLdvR9HO1ZJBypsOGqaP6TFEzb6vIta0KSTLt9NAQ6pXQO3cRgSVyCN6pzYqI9DlJgY71XKO0dpDhCf08b3pg==}
@@ -1104,11 +1097,6 @@ snapshots:
   '@prisma/get-platform@5.22.0':
     dependencies:
       '@prisma/debug': 5.22.0
-
-  '@smart-ppe/common@https://codeload.github.com/smart-ppe-monitoring/smart-ppe-shared-contracts/tar.gz/38c57d25258b73126bdd31cb05d5cdb34f0c1555':
-    dependencies:
-      uuidv7: 1.2.1
-      zod: 3.25.76
 
   '@tsconfig/node10@1.0.13': {}
 

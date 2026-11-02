@@ -25,10 +25,6 @@ export const restrictedAreaIdParamSchema = z.object({
   id: uuidSchema,
 });
 
-export const siteIdParamOnlySchema = z.object({
-  siteId: uuidSchema,
-});
-
 const CODE_REGEX = /^[A-Z0-9_-]+$/i;
 
 // ── Contact Officer Schemas ──────────────────────────────────────────────────
